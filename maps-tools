@@ -1,0 +1,182 @@
+#!/usr/bin/env bash
+
+#needs to increment on every change!!!
+#version: 2
+
+#self installation
+if [ ! -x /usr/local/bin/maps-tools ]; then
+  echo "installing maps-tools to /usr/local/bin"
+  echo ""
+  cp ./maps-tools /usr/local/bin/maps-tools
+  chmod 755 /usr/local/bin/maps-tools
+  echo 'add /usr/local/bin to your $PATH environment variable'
+  echo 'for example:'
+  echo ''
+  echo 'bash:'
+  echo 'echo export PATH="/usr/local/bin:$PATH" >> ${HOME}/.bashrc && source ${HOME}/.bashrc'
+  echo 'zsh:'
+  echo 'echo export PATH="/usr/local/bin:$PATH" >> ${HOME}/.zshrc && source ${HOME}/.zshrc'
+  echo ''
+  exit 0
+fi
+
+#do an upgrade if newer version exists
+if [ -x /usr/local/bin/maps-tools ]; then
+  if [ -e ./maps-tools ] && [ ! -d ./maps-tools ]; then
+    if [ $(grep -m 1 "#version:" /usr/local/bin/maps-tools | awk '{print $2}') -lt $(grep -m 1 "#version:" ./maps-tools | awk '{print $2}') ]; then
+      echo "upgrading maps-tools in /usr/local/bin"
+      cp -f ./maps-tools /usr/local/bin/maps-tools
+      chmod 755 /usr/local/bin/maps-tools
+      exit 0
+    fi
+  fi
+fi
+
+#starting docker setup
+readonly DEFAULT_DOCKER_IMAGE_NAME=maps-tools
+readonly DEFAULT_DOCKER_USERNAME=k8s
+USE_DOCKER_IMAGE=false
+DEFAULT_STAGE=$AWS_PROFILE
+USE_AWS_VOLUME=true
+CREATE_DAEMON_CONTAINER=false
+CONTAINER_ATTACH=false
+AZURE_LOGIN=false
+UPDATE_DOCKER=false
+USER_NAME=${HOME##*/}
+volumes[0]="-v $HOME/.aws:/home/$DEFAULT_DOCKER_USERNAME/.aws"
+volumes[1]="-v $HOME:/home/$USER_NAME"
+volumes[2]="-v $HOME/.ssh:/home/$DEFAULT_DOCKER_USERNAME/.ssh"
+volumes[3]="-v $HOME/.helm:/home/$DEFAULT_DOCKER_USERNAME/.helm"
+volumes[4]="-v $HOME/.kube:/home/$DEFAULT_DOCKER_USERNAME/.kube"
+
+function print_usage() {
+  echo
+  echo "Usage: $0 [-e] [-v] [-h] [-i]"
+  echo '-e: Environment example (AWS_PROFILE NAME: as-spring-mediasites-stage|as-spring-mediasites-prod)'
+  echo '-v: DO NOT USE a Docker volume mount for local .aws, .ssh, .helm and .kube configs inside the container.'
+  echo '-h: Print this help text'
+  echo '-i: Ask for a local Docker image to use'
+  echo '-d: create daemon container that runs in the background, so you can use docker exec to connect to'
+  echo '-a: attach to daemon container that previously created with -d option'
+  echo '-l: test option to login with AZURE AD'
+  echo '-u: update docker image, force pull'
+  echo
+
+  exit 0
+}
+
+function create_docker_run_command() {
+  [ $# -ne 1 ] && echo ❌ No image name given to function \"create_docker_run_command\" && return
+  local docker_string=""
+  local image_name="$1"
+  case true in
+    "$CREATE_DAEMON_CONTAINER")
+      if [[ $(docker ps -a --format "{{.Names}}" --filter "name=maps-tools") == "maps-tools" ]]
+      then
+        docker rm -f maps-tools 2>&1 >/dev/null
+      fi
+      if [[ "${USE_AWS_VOLUME}" == true ]]
+      then
+        docker_string="docker create --name maps-tools ${volumes[*]} -e \"AWS_PROFILE=$DEFAULT_STAGE\" -e \"AZURE_LOGIN=$AZURE_LOGIN\" --entrypoint \"/init/init_daemon.sh\" $image_name"
+      else
+        docker_string="docker create --name maps-tools ${volumes[1]} -e \"AWS_PROFILE=$DEFAULT_STAGE\" -e \"AZURE_LOGIN=$AZURE_LOGIN\" --entrypoint \"/init/init_daemon.sh\" $image_name"
+      fi
+      ;;
+    "$CONTAINER_ATTACH")
+      if [[ $(docker ps --format "{{.Names}}" --filter "name=maps-tools") == "maps-tools" ]]
+      then
+        docker_string="docker exec -ti -e \"AWS_PROFILE=$DEFAULT_STAGE\" maps-tools /usr/bin/bash --login"
+      elif [[ $(docker ps -a --format "{{.Names}}" --filter "name=maps-tools") == "maps-tools" ]]
+      then
+        docker_string="docker start maps-tools; docker exec -ti -e \"AWS_PROFILE=$DEFAULT_STAGE\" maps-tools /init/init.sh"
+      fi
+      ;;
+    *)
+      if [[ "${USE_AWS_VOLUME}" == true ]]
+      then
+        docker_string="docker run -it --rm ${volumes[*]} -e \"AWS_PROFILE=$DEFAULT_STAGE\" -e \"AZURE_LOGIN=$AZURE_LOGIN\" $image_name"
+      else
+        docker_string="docker run -it --rm ${volumes[1]} -e \"AWS_PROFILE=$DEFAULT_STAGE\" -e \"AZURE_LOGIN=$AZURE_LOGIN\" $image_name"
+      fi
+      ;;
+  esac
+  echo "$docker_string"
+}
+
+function run_docker_image() {
+  local image="ghcr.io/spring-media/maps-tools:latest"
+  printf "ENVIRONMENT: %s\n\n" "${DEFAULT_STAGE}"
+  if [[ "${CREATE_DAEMON_CONTAINER}" == true && "${CONTAINER_ATTACH}" == true ]]
+  then 
+    echo "you cannot use -d and -a Option simultaneously"
+    exit 1
+  fi
+  case true in
+    "$USE_DOCKER_IMAGE")
+      declare -a docker_images=( $(docker images |grep ${DEFAULT_DOCKER_IMAGE_NAME} |awk '{ print $1 ":" $2 }') )
+      if [ ${#docker_images[@]} -eq 0 ]; then echo ❌ Image not found. Run \"make build\" or download image from \"GitHub Package Repository\" !; exit 1; fi
+      PS3="Choose the image to run: "
+      select docker_image_name in "${docker_images[@]}"; do
+        if (( $REPLY >= 1 && $REPLY < (( "${#docker_images[@]}" + 1)) )); then
+          local image="${docker_images[(($REPLY - 1))]}"
+          local docker_run_command="$(create_docker_run_command "$image")"
+          eval $docker_run_command
+        else
+          echo ❌ Invalid choice && exit 1
+        fi
+        break
+      done
+      ;;
+    "${UPDATE_DOCKER}")
+      local docker_update_command="docker pull $image"
+      eval $docker_update_command
+      exit $?
+      ;;
+    *)
+      local docker_run_command="$(create_docker_run_command "$image")"
+      eval $docker_run_command
+    ;;
+  esac
+}
+
+# Skip script execution when running without flags
+#[ $# -eq 0 ] && echo ❌ No arguments given && exit 1
+
+# Parse flags
+while getopts "b:he:ivdalu" argument; do
+  case "${argument}" in
+    b)
+      # Will be eventually used for additional BUILD ARGs later. Currently, the only BUILD ARG is directly
+      # handled in "create_docker_run_command"
+      echo 🛠️ TODO !
+      ;;
+    e)
+      DEFAULT_STAGE="${OPTARG}"
+      ;;
+    v)
+      USE_AWS_VOLUME=false
+      ;;
+    i)
+      USE_DOCKER_IMAGE=true
+      ;;
+    d)
+      CREATE_DAEMON_CONTAINER=true
+      ;;
+    a)
+      CONTAINER_ATTACH=true
+      ;;
+    l)
+      AZURE_LOGIN=true
+      ;;
+    u)
+      UPDATE_DOCKER=true
+      ;;
+    h | ? | *)
+      print_usage
+      ;;
+  esac
+done
+shift $((OPTIND - 1))
+
+# Call function to obtain the proper call to docker run
+run_docker_image
