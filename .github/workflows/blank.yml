@@ -2,6 +2,7 @@ name: Publish
 
 on:
   push:
+  
     
 jobs:
   build:
@@ -26,4 +27,3 @@ jobs:
         ls -hal
         git add fooFile
         git commit -am "Publish"
-        git push
