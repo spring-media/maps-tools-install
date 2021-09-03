@@ -21,9 +21,9 @@ jobs:
         git checkout main
         echo "Current files in Install-Repo"
         ls -hal
-        date >> maps-tool
+        touch fooFile
         echo "NEW files in Install-Repo"
         ls -hal
-        git add maps-tools
+        git add fooFile
         git commit -am "Publish"
         git push
