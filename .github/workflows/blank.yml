@@ -1,0 +1,30 @@
+name: Publish
+
+on:
+  push:
+    branches: [master]
+    
+jobs:
+  build:
+    name: Publish binaries
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Publish
+      run: |
+        mkdir maps-tools-install
+        cd maps-tools-install
+        git init
+        git config --global user.name 'BOT'
+        git config --global user.email 'BOT@users.noreply.github.com'
+        git remote add origin https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/spring-media/maps-tools-install
+        git fetch
+        git checkout main
+        echo "Current files in Install-Repo"
+        ls -hal
+        date >> maps-tool
+        echo "NEW files in Install-Repo"
+        ls -hal
+        git add maps-tools
+        git commit -am "Publish"
+        git push
