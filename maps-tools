@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 #needs to increment on every change!!!
-#version: 2
+#version: 3
 
 #self installation
 if [ ! -x /usr/local/bin/maps-tools ]; then
@@ -35,12 +35,14 @@ fi
 #starting docker setup
 readonly DEFAULT_DOCKER_IMAGE_NAME=maps-tools
 readonly DEFAULT_DOCKER_USERNAME=k8s
+readonly DEFAULT_TEAM_NAMES="red lean mediasites ott apps mds"
 USE_DOCKER_IMAGE=false
 DEFAULT_STAGE=$AWS_PROFILE
 USE_AWS_VOLUME=true
 CREATE_DAEMON_CONTAINER=false
 CONTAINER_ATTACH=false
 AZURE_LOGIN=false
+AZURE_LOGIN_ROLE=Developer
 UPDATE_DOCKER=false
 USER_NAME=${HOME##*/}
 volumes[0]="-v $HOME/.aws:/home/$DEFAULT_DOCKER_USERNAME/.aws"
@@ -58,11 +60,21 @@ function print_usage() {
   echo '-i: Ask for a local Docker image to use'
   echo '-d: create daemon container that runs in the background, so you can use docker exec to connect to'
   echo '-a: attach to daemon container that previously created with -d option'
-  echo '-l: test option to login with AZURE AD'
+  echo '-l: test option to login with AZURE AD, default role is Developer, you can also specify default assume role: Admin, Developer, OnlyViewer after parameter, e.g. -l Admin'
   echo '-u: update docker image, force pull'
   echo
 
   exit 0
+}
+
+getopts_get_optional_argument() {
+  eval next_token=\${$OPTIND}
+  if [[ -n $next_token && $next_token != -* ]]; then
+    OPTIND=$((OPTIND + 1))
+    OPTARG=$next_token
+  else
+    OPTARG=""
+  fi
 }
 
 function create_docker_run_command() {
@@ -77,26 +89,26 @@ function create_docker_run_command() {
       fi
       if [[ "${USE_AWS_VOLUME}" == true ]]
       then
-        docker_string="docker create --name maps-tools ${volumes[*]} -e \"AWS_PROFILE=$DEFAULT_STAGE\" -e \"AZURE_LOGIN=$AZURE_LOGIN\" --entrypoint \"/init/init_daemon.sh\" $image_name"
+        docker_string="docker create --name maps-tools ${volumes[*]} -e \"AZURE_LOGIN_ROLE=$AZURE_LOGIN_ROLE\" -e \"DEFAULT_TEAM_NAMES=$DEFAULT_TEAM_NAMES\" -e \"AWS_PROFILE=$DEFAULT_STAGE\" -e \"AZURE_LOGIN=$AZURE_LOGIN\" --entrypoint \"/init/init_daemon.sh\" $image_name"
       else
-        docker_string="docker create --name maps-tools ${volumes[1]} -e \"AWS_PROFILE=$DEFAULT_STAGE\" -e \"AZURE_LOGIN=$AZURE_LOGIN\" --entrypoint \"/init/init_daemon.sh\" $image_name"
+        docker_string="docker create --name maps-tools ${volumes[1]} -e \"AZURE_LOGIN_ROLE=$AZURE_LOGIN_ROLE\" -e \"DEFAULT_TEAM_NAMES=$DEFAULT_TEAM_NAMES\" -e \"AWS_PROFILE=$DEFAULT_STAGE\" -e \"AZURE_LOGIN=$AZURE_LOGIN\" --entrypoint \"/init/init_daemon.sh\" $image_name"
       fi
       ;;
     "$CONTAINER_ATTACH")
       if [[ $(docker ps --format "{{.Names}}" --filter "name=maps-tools") == "maps-tools" ]]
       then
-        docker_string="docker exec -ti -e \"AWS_PROFILE=$DEFAULT_STAGE\" maps-tools /usr/bin/bash --login"
+        docker_string="docker exec -ti -e \"DEFAULT_TEAM_NAMES=$DEFAULT_TEAM_NAMES\" -e \"AWS_PROFILE=$DEFAULT_STAGE\" maps-tools /usr/bin/bash --login"
       elif [[ $(docker ps -a --format "{{.Names}}" --filter "name=maps-tools") == "maps-tools" ]]
       then
-        docker_string="docker start maps-tools; docker exec -ti -e \"AWS_PROFILE=$DEFAULT_STAGE\" maps-tools /init/init.sh"
+        docker_string="docker start maps-tools; docker exec -ti -e \"DEFAULT_TEAM_NAMES=$DEFAULT_TEAM_NAMES\" -e \"AWS_PROFILE=$DEFAULT_STAGE\" maps-tools /init/init.sh"
       fi
       ;;
     *)
       if [[ "${USE_AWS_VOLUME}" == true ]]
       then
-        docker_string="docker run -it --rm ${volumes[*]} -e \"AWS_PROFILE=$DEFAULT_STAGE\" -e \"AZURE_LOGIN=$AZURE_LOGIN\" $image_name"
+        docker_string="docker run -it --rm ${volumes[*]} -e \"AZURE_LOGIN_ROLE=$AZURE_LOGIN_ROLE\" -e \"DEFAULT_TEAM_NAMES=$DEFAULT_TEAM_NAMES\" -e \"AWS_PROFILE=$DEFAULT_STAGE\" -e \"AZURE_LOGIN=$AZURE_LOGIN\" $image_name"
       else
-        docker_string="docker run -it --rm ${volumes[1]} -e \"AWS_PROFILE=$DEFAULT_STAGE\" -e \"AZURE_LOGIN=$AZURE_LOGIN\" $image_name"
+        docker_string="docker run -it --rm ${volumes[1]} -e \"AZURE_LOGIN_ROLE=$AZURE_LOGIN_ROLE\" -e \"DEFAULT_TEAM_NAMES=$DEFAULT_TEAM_NAMES\" -e \"AWS_PROFILE=$DEFAULT_STAGE\" -e \"AZURE_LOGIN=$AZURE_LOGIN\" $image_name"
       fi
       ;;
   esac
@@ -166,7 +178,9 @@ while getopts "b:he:ivdalu" argument; do
       CONTAINER_ATTACH=true
       ;;
     l)
-      AZURE_LOGIN=true
+      getopts_get_optional_argument $@
+      AZURE_LOGIN_ROLE=${OPTARG}
+      AZURE_LOGIN=true;
       ;;
     u)
       UPDATE_DOCKER=true
