@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 #needs to increment on every change!!!
-#version: 4
+#version: 5
 
 #self installation
 if [ ! -x /usr/local/bin/maps-tools ]; then
