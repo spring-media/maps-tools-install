@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 #needs to increment on every change!!!
-#version: 6
+#version: 7
 
 #self installation
 if [ ! -x /usr/local/bin/maps-tools ]; then
@@ -18,9 +18,9 @@ if [ ! -x /usr/local/bin/maps-tools ]; then
   echo 'for example:'
   echo ''
   echo 'bash:'
-  echo 'echo export PATH="/usr/local/bin:$PATH" >> ${HOME}/.bashrc && source ${HOME}/.bashrc'
+  echo 'echo export PATH="/usr/local/bin:\$PATH" >> ${HOME}/.bashrc && source ${HOME}/.bashrc'
   echo 'zsh:'
-  echo 'echo export PATH="/usr/local/bin:$PATH" >> ${HOME}/.zshrc && source ${HOME}/.zshrc'
+  echo 'echo export PATH="/usr/local/bin:\$PATH" >> ${HOME}/.zshrc && source ${HOME}/.zshrc'
   echo ''
   exit 0
 fi
@@ -43,7 +43,7 @@ if [ -x /usr/local/bin/maps-tools ]; then
 fi
 
 if [ "${0##*/}" != "maps-tools" ]; then
-  echo "do not run maps-tools as a stream"
+  echo "Already up-to-date"
   exit 1
 fi
 
