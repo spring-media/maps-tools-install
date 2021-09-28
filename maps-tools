@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
 
 #needs to increment on every change!!!
-#version: 7
+#version: 8
+
+(pgrep -x docker > /dev/null && echo "Docker is running" )|| (echo "Starting Docker" && open /Applications/Docker.app)
+
+[ ! -d "/Applications/Docker.app" ] && echo "Please Install Docker Desktop"
 
 #self installation
 if [ ! -x /usr/local/bin/maps-tools ]; then
