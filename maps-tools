@@ -12,7 +12,7 @@ if [ ! -x /usr/local/bin/maps-tools ]; then
   echo "installing maps-tools to /usr/local/bin"
   echo ""
   if test -f ./maps-tools; then
-    cp ./maps-tools /usr/local/bin/maps-tools
+    sudo cp ./maps-tools /usr/local/bin/maps-tools
   else
     curl -s https://raw.githubusercontent.com/spring-media/maps-tools-install/main/maps-tools >/usr/local/bin/maps-tools
   fi
