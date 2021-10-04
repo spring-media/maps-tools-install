@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 #needs to increment on every change!!!
-#version: 8
+#version: 9
 
 (pgrep -x docker > /dev/null && echo "Docker is running" )|| (echo "Starting Docker" && open /Applications/Docker.app)
 
