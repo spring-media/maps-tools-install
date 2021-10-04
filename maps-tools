@@ -14,7 +14,7 @@ if [ ! -x /usr/local/bin/maps-tools ]; then
   if test -f ./maps-tools; then
     sudo cp ./maps-tools /usr/local/bin/maps-tools
   else
-    curl -s https://raw.githubusercontent.com/spring-media/maps-tools-install/main/maps-tools >/usr/local/bin/maps-tools
+    sudo curl -s https://raw.githubusercontent.com/spring-media/maps-tools-install/main/maps-tools >/usr/local/bin/maps-tools
   fi
 
   chmod 755 /usr/local/bin/maps-tools
