@@ -14,7 +14,7 @@ if [ ! -x /usr/local/bin/maps-tools ]; then
   if test -f ./maps-tools; then
     sudo cp ./maps-tools /usr/local/bin/maps-tools
   else
-    sudo curl -s https://raw.githubusercontent.com/spring-media/maps-tools-install/main/maps-tools >/usr/local/bin/maps-tools
+    curl -s https://raw.githubusercontent.com/spring-media/maps-tools-install/main/maps-tools >/usr/local/bin/maps-tools
   fi
 
   chmod 755 /usr/local/bin/maps-tools
@@ -201,7 +201,14 @@ while getopts "b:o:he:ivdaul" argument; do
     l)
       getopts_get_optional_argument $@
       AZURE_LOGIN_ROLE=${OPTARG}
-      AZURE_LOGIN=true;
+      arch=$(uname -m)
+      if [ "$arch" = "amd64" ]; then
+        AZURE_LOGIN=true;
+      else
+        echo "╔════════════════════════════════════════════════════════════════════╗"
+        echo "║⚠️ CPU ARCHITECTURE NOT SUPPORTED FOR AZURE LOGIN! USING ADFS INSTEAD║"
+        echo "╚════════════════════════════════════════════════════════════════════╝"
+      fi
       ;;
     u)
       UPDATE_DOCKER=true
