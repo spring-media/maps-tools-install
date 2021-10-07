@@ -1,58 +1,13 @@
 #!/usr/bin/env bash
 
 #needs to increment on every change!!!
-#version: 9
+#version: 10
 
-(pgrep -x docker > /dev/null && echo "Docker is running" )|| (echo "Starting Docker" && open /Applications/Docker.app)
-
-[ ! -d "/Applications/Docker.app" ] && echo "Please Install Docker Desktop"
-
-#self installation
-if [ ! -x /usr/local/bin/maps-tools ]; then
-  echo "installing maps-tools to /usr/local/bin"
-  echo ""
-  if test -f ./maps-tools; then
-    sudo cp ./maps-tools /usr/local/bin/maps-tools
-  else
-    curl -s https://raw.githubusercontent.com/spring-media/maps-tools-install/main/maps-tools >/usr/local/bin/maps-tools
-  fi
-
-  chmod 755 /usr/local/bin/maps-tools
-  echo 'add /usr/local/bin to your $PATH environment variable'
-  echo 'for example:'
-  echo ''
-  echo 'bash:'
-  echo 'echo export PATH="/usr/local/bin:\$PATH" >> ${HOME}/.bashrc && source ${HOME}/.bashrc'
-  echo 'zsh:'
-  echo 'echo export PATH="/usr/local/bin:\$PATH" >> ${HOME}/.zshrc && source ${HOME}/.zshrc'
-  echo ''
-  exit 0
-fi
-
-#do an upgrade if newer version exists
-if [ -x /usr/local/bin/maps-tools ]; then
-  if [ -e ./maps-tools ] && [ ! -d ./maps-tools ]; then
-    if [ $(grep -m 1 "#version:" /usr/local/bin/maps-tools | awk '{print $2}') -lt $(grep -m 1 "#version:" ./maps-tools | awk '{print $2}') ]; then
-      echo "upgrading maps-tools version from local binary ./maps-tools to /usr/local/bin/maps-tools"
-      cp -f ./maps-tools /usr/local/bin/maps-tools
-      chmod 755 /usr/local/bin/maps-tools
-      exit 0
-    fi
-  elif [ $(grep -m 1 "#version:" /usr/local/bin/maps-tools | awk '{print $2}') -lt $(curl -s https://raw.githubusercontent.com/spring-media/maps-tools-install/main/maps-tools | grep -m 1 "#version:" | awk '{print $2}') ]; then
-    echo "upgrading maps-tools version from curl download to /usr/local/bin/maps-tools"
-    curl -s https://raw.githubusercontent.com/spring-media/maps-tools-install/main/maps-tools >/usr/local/bin/maps-tools
-    chmod 755 /usr/local/bin/maps-tools
-    exit 0
-  fi
-fi
-
-if [ "${0##*/}" != "maps-tools" ]; then
-  echo "Already up-to-date"
-  exit 1
-fi
-
-#starting docker setup
+#initialize variables
+readonly DEFAULT_DOCKER_IMAGE_REGISTRY="ghcr.io/spring-media"
 readonly DEFAULT_DOCKER_IMAGE_NAME=maps-tools
+readonly DEFAULT_DOCKER_IMAGE_TAG=latest
+readonly DEFAULT_DOCKER_IMAGE="${DEFAULT_DOCKER_IMAGE_REGISTRY}/${DEFAULT_DOCKER_IMAGE_NAME}:${DEFAULT_DOCKER_IMAGE_TAG}"
 readonly DEFAULT_DOCKER_USERNAME=k8s
 readonly DEFAULT_TEAM_NAMES="red lean mediasites ott apps mds"
 USE_DOCKER_IMAGE=false
@@ -62,7 +17,7 @@ CREATE_DAEMON_CONTAINER=false
 CONTAINER_ATTACH=false
 AZURE_LOGIN=false
 AZURE_LOGIN_ROLE=Developer
-UPDATE_DOCKER=false
+UPDATE=false
 USER_NAME=${HOME##*/}
 declare -a ADDITIONAL_CONTAINER_ARGS
 volumes[0]="-v $HOME/.aws:/home/$DEFAULT_DOCKER_USERNAME/.aws"
@@ -82,20 +37,10 @@ function print_usage() {
   echo '-a: attach to daemon container that previously created with -d option'
   echo '-l: test option to login with AZURE AD, default role is Developer, you can also specify default assume role: Admin, Developer, OnlyViewer after parameter, e.g. -l Admin'
   echo '-o: add aditional cmd parameter to docker run/create command, IMPORTANT: use double quotes! you can use this option more than one time, e.g. -o "-p 2222:22" -o "-e DISPLAY=host.docker.internal:0"'
-  echo '-u: update docker image, force pull'
+  echo '-u: update maps-tools and docker image (force pull)'
   echo
 
   exit 0
-}
-
-getopts_get_optional_argument() {
-  eval next_token=\${$OPTIND}
-  if [[ -n $next_token && $next_token != -* ]]; then
-    OPTIND=$((OPTIND + 1))
-    OPTARG=$next_token
-  else
-    OPTARG=""
-  fi
 }
 
 function create_docker_run_command() {
@@ -137,7 +82,7 @@ function create_docker_run_command() {
 }
 
 function run_docker_image() {
-  local image="ghcr.io/spring-media/maps-tools:latest"
+  local image=${DEFAULT_DOCKER_IMAGE}
   printf "ENVIRONMENT: %s\n\n" "${DEFAULT_STAGE}"
   if [[ "${CREATE_DAEMON_CONTAINER}" == true && "${CONTAINER_ATTACH}" == true ]]
   then 
@@ -160,11 +105,6 @@ function run_docker_image() {
         break
       done
       ;;
-    "${UPDATE_DOCKER}")
-      local docker_update_command="docker pull $image"
-      eval $docker_update_command
-      exit $?
-      ;;
     *)
       local docker_run_command="$(create_docker_run_command "$image")"
       eval $docker_run_command
@@ -172,8 +112,64 @@ function run_docker_image() {
   esac
 }
 
-# Skip script execution when running without flags
-#[ $# -eq 0 ] && echo ❌ No arguments given && exit 1
+function get_script() {
+  if [ -f ./maps-tools ]; then
+    cp -f ./maps-tools /tmp/maps-tools
+  else
+    curl -s https://raw.githubusercontent.com/spring-media/maps-tools-install/main/maps-tools >/tmp/maps-tools
+  fi
+  retVal=$?
+  if [ $retVal -ne 0 ]; then
+    echo "Error getting version of maps-tools"
+    exit $retVal
+  fi
+}
+
+function install_script() {
+  if [ -f /tmp/maps-tools ]; then
+    cp -f /tmp/maps-tools /usr/local/bin/maps-tools >/dev/null || sudo cp -f /tmp/maps-tools /usr/local/bin/maps-tools
+    chmod 755 /usr/local/bin/maps-tools >/dev/null || sudo chmod 755 /usr/local/bin/maps-tools
+  else
+    echo "no version of maps-tools found for installation"
+    exit 1
+  fi
+}
+
+function check_for_updates() {
+  if [ -f /tmp/maps-tools ]; then
+    local version=$(grep -m 1 "#version:" /usr/local/bin/maps-tools | awk '{print $2}')
+    local new_version=$(grep -m 1 "#version:" /tmp/maps-tools | awk '{print $2}')
+    if [ ${version} -lt ${new_version} ]; then
+      echo "upgrading maps-tools to version ${new_version}"
+      install_script
+    else
+      echo "no upgrade available for maps-tools"
+    fi
+  else
+    echo "no version of maps-tools found for installation"
+    exit 1
+  fi
+}
+
+function cleanup_tmp() {
+  if [ -f /tmp/maps-tools ]; then
+    rm -f /tmp/maps-tools
+  fi
+}
+
+function docker_pull() {
+  docker pull ${DEFAULT_DOCKER_IMAGE}
+}
+
+function getopts_get_optional_argument() {
+  eval next_token=\${$OPTIND}
+  if [[ -n $next_token && $next_token != -* ]]; then
+    OPTIND=$((OPTIND + 1))
+    OPTARG=$next_token
+  else
+    OPTARG=""
+  fi
+}
 
 # Parse flags
 while getopts "b:o:he:ivdaul" argument; do
@@ -202,7 +198,7 @@ while getopts "b:o:he:ivdaul" argument; do
       getopts_get_optional_argument $@
       AZURE_LOGIN_ROLE=${OPTARG}
       arch=$(uname -m)
-      if [ "$arch" = "amd64" ]; then
+      if [[ "$arch" == "amd64" || "$arch" == "x86_64" ]]; then
         AZURE_LOGIN=true;
       else
         echo "╔════════════════════════════════════════════════════════════════════╗"
@@ -211,7 +207,7 @@ while getopts "b:o:he:ivdaul" argument; do
       fi
       ;;
     u)
-      UPDATE_DOCKER=true
+      UPDATE=true
       ;;
     o)
       ADDITIONAL_CONTAINER_ARGS+=("$OPTARG")
@@ -222,6 +218,47 @@ while getopts "b:o:he:ivdaul" argument; do
   esac
 done
 shift $((OPTIND - 1))
+
+#self installation or upgrade
+if [ ! -x /usr/local/bin/maps-tools ]; then
+  echo "installing maps-tools to /usr/local/bin"
+  echo ""
+
+  get_script
+  install_script
+  cleanup_tmp
+
+  echo 'add /usr/local/bin to your $PATH environment variable'
+  echo 'for example:'
+  echo ''
+  echo 'bash:'
+  echo 'echo export PATH="/usr/local/bin:\$PATH" >> ${HOME}/.bashrc && source ${HOME}/.bashrc'
+  echo 'zsh:'
+  echo 'echo export PATH="/usr/local/bin:\$PATH" >> ${HOME}/.zshrc && source ${HOME}/.zshrc'
+  echo ''
+  exit 0
+elif [ -x /usr/local/bin/maps-tools ] && [ "$UPDATE" = true ]; then
+  get_script
+  check_for_updates
+  cleanup_tmp
+  docker_pull
+  exit 0
+elif [ -x /usr/local/bin/maps-tools ] && [ "${0##*/}" != "maps-tools" ]; then
+  get_script
+  check_for_updates
+  cleanup_tmp
+  docker_pull
+  exit 0
+fi
+
+#check docker is installed
+if [ ! -d "/Applications/Docker.app" ]; then
+  echo "Please Install Docker Desktop"
+  exit 1
+fi
+
+#check docker is running
+(pgrep -x docker > /dev/null && echo "Docker is running" )|| (echo "Starting Docker" && open /Applications/Docker.app && sleep 20)
 
 # Call function to obtain the proper call to docker run
 run_docker_image
