@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 #needs to increment on every change!!!
-#version: 12
+#version: 13
 
 #initialize variables
 readonly DEFAULT_DOCKER_IMAGE_REGISTRY="ghcr.io/spring-media"
@@ -9,7 +9,7 @@ readonly DEFAULT_DOCKER_IMAGE_NAME=maps-tools
 readonly DEFAULT_DOCKER_IMAGE_TAG=latest
 readonly DEFAULT_DOCKER_IMAGE="${DEFAULT_DOCKER_IMAGE_REGISTRY}/${DEFAULT_DOCKER_IMAGE_NAME}:${DEFAULT_DOCKER_IMAGE_TAG}"
 readonly DEFAULT_DOCKER_USERNAME=k8s
-readonly DEFAULT_TEAM_NAMES="red lean mediasites ott apps mds privacywatch hh"
+readonly DEFAULT_TEAM_NAMES="red lean mediasites ott apps mds privacywatch kafka hh"
 USE_DOCKER_IMAGE=false
 DEFAULT_STAGE=$AWS_PROFILE
 USE_AWS_VOLUME=true
@@ -85,7 +85,7 @@ function run_docker_image() {
   local image=${DEFAULT_DOCKER_IMAGE}
   printf "ENVIRONMENT: %s\n\n" "${DEFAULT_STAGE}"
   if [[ "${CREATE_DAEMON_CONTAINER}" == true && "${CONTAINER_ATTACH}" == true ]]
-  then 
+  then
     echo "you cannot use -d and -a Option simultaneously"
     exit 1
   fi
@@ -128,7 +128,7 @@ function get_script() {
 function install_script() {
   if [ -f /tmp/maps-tools ]; then
     cp -f /tmp/maps-tools /usr/local/bin/maps-tools >/dev/null || sudo cp -f /tmp/maps-tools /usr/local/bin/maps-tools
-    chmod 755 /usr/local/bin/maps-tools >/dev/null || sudo chmod 755 /usr/local/bin/maps-tools
+    chmod 755 /usr/local/bin/maps-tools >/dev/null || sudo chmod 755 /usr/local/bin/maps-tools
   else
     echo "no version of maps-tools found for installation"
     exit 1
