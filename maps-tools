@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 #needs to increment on every change!!!
-#version: 13
+#version: 14
 
 #initialize variables
 readonly DEFAULT_DOCKER_IMAGE_REGISTRY="ghcr.io/spring-media"
@@ -35,7 +35,7 @@ function print_usage() {
   echo '-i: Ask for a local Docker image to use'
   echo '-d: create daemon container that runs in the background, so you can use docker exec to connect to'
   echo '-a: attach to daemon container that previously created with -d option'
-  echo '-l: test option to login with AZURE AD, default role is Developer, you can also specify default assume role: Admin, Developer, OnlyViewer after parameter, e.g. -l Admin'
+  echo '-l: (EXPERIMENTAL) test option to login with AZURE AD, default role is Developer, you can also specify default assume role: Admin, Developer, OnlyViewer after parameter, e.g. -l Admin'
   echo '-o: add aditional cmd parameter to docker run/create command, IMPORTANT: use double quotes! you can use this option more than one time, e.g. -o "-p 2222:22" -o "-e DISPLAY=host.docker.internal:0"'
   echo '-u: update maps-tools and docker image (force pull)'
   echo
