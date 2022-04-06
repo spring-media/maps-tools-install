@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
 
 #needs to increment on every change!!!
-#version: 15
+#version: 16
 
 #initialize variables
 readonly DEFAULT_DOCKER_IMAGE_REGISTRY="ghcr.io/spring-media"
 readonly DEFAULT_DOCKER_IMAGE_NAME=maps-tools
 readonly DEFAULT_DOCKER_IMAGE_TAG=latest
+readonly DEFAULT_DOCKER_IMAGE_TAG_TESTING=testing
 readonly DEFAULT_DOCKER_IMAGE="${DEFAULT_DOCKER_IMAGE_REGISTRY}/${DEFAULT_DOCKER_IMAGE_NAME}:${DEFAULT_DOCKER_IMAGE_TAG}"
+readonly DEFAULT_DOCKER_IMAGE_TESTING="${DEFAULT_DOCKER_IMAGE_REGISTRY}/${DEFAULT_DOCKER_IMAGE_NAME}:${DEFAULT_DOCKER_IMAGE_TAG_TESTING}"
 readonly DEFAULT_DOCKER_USERNAME=k8s
 readonly DEFAULT_TEAM_NAMES="red lean mediasites ott apps mds privacywatch kafka hh"
 USE_DOCKER_IMAGE=false
@@ -18,8 +20,8 @@ CONTAINER_ATTACH=false
 AZURE_LOGIN=false
 AZURE_LOGIN_ROLE=Developer
 SSO_LOGIN=false
-SSO_LOGIN_ROLE=NMT-dev
 UPDATE=false
+RELEASE=
 USER_NAME=${HOME##*/}
 declare -a ADDITIONAL_CONTAINER_ARGS
 volumes[0]="-v $HOME/.aws:/home/$DEFAULT_DOCKER_USERNAME/.aws"
@@ -40,7 +42,7 @@ function print_usage() {
   echo '-l: (EXPERIMENTAL/DEPRECATED) test option to login with AZURE AD, default role is Developer, you can also specify default assume role: Admin, Developer, OnlyViewer after parameter, e.g. -l Admin'
   echo '-L: (BETA) option to login with AWS SSO AD LOGIN, default role is "NMT-dev", you can also specify default assume role: NMT-admin, NMT-dev, NMT-vieweronly after parameter, e.g. -L NMT-admin'
   echo '-o: add aditional cmd parameter to docker run/create command, IMPORTANT: use double quotes! you can use this option more than one time, e.g. -o "-p 2222:22" -o "-e DISPLAY=host.docker.internal:0"'
-  echo '-u: update maps-tools and docker image (force pull)'
+  echo '-u: update maps-tools and docker image (force pull), to get testing versions use "-u testing"'
   echo
 
   exit 0
@@ -119,7 +121,7 @@ function get_script() {
   if [ -f ./maps-tools ]; then
     cp -f ./maps-tools /tmp/maps-tools
   else
-    curl -s https://raw.githubusercontent.com/spring-media/maps-tools-install/main/maps-tools >/tmp/maps-tools
+    curl -s https://raw.githubusercontent.com/spring-media/maps-tools-install/main/maps-tools${RELEASE} >/tmp/maps-tools
   fi
   retVal=$?
   if [ $retVal -ne 0 ]; then
@@ -130,8 +132,8 @@ function get_script() {
 
 function install_script() {
   if [ -f /tmp/maps-tools ]; then
-    cp -f /tmp/maps-tools /usr/local/bin/maps-tools >/dev/null || sudo cp -f /tmp/maps-tools /usr/local/bin/maps-tools
-    chmod 755 /usr/local/bin/maps-tools >/dev/null || sudo chmod 755 /usr/local/bin/maps-tools
+    cp -f /tmp/maps-tools /usr/local/bin/maps-tools 2>&1 >/dev/null || sudo cp -f /tmp/maps-tools /usr/local/bin/maps-tools
+    chmod 755 /usr/local/bin/maps-tools 2>&1 >/dev/null || sudo chmod 755 /usr/local/bin/maps-tools
   else
     echo "no version of maps-tools found for installation"
     exit 1
@@ -161,7 +163,11 @@ function cleanup_tmp() {
 }
 
 function docker_pull() {
-  docker pull ${DEFAULT_DOCKER_IMAGE}
+  if [[ -z $RELEASE ]]; then
+    docker pull ${DEFAULT_DOCKER_IMAGE}
+  elif [[ -n $RELEASE ]]; then
+    docker pull ${DEFAULT_DOCKER_IMAGE_TESTING}
+  fi
 }
 
 function getopts_get_optional_argument() {
@@ -215,6 +221,10 @@ while getopts "b:o:he:ivdaulL" argument; do
       SSO_LOGIN=true;
       ;;
     u)
+      getopts_get_optional_argument $@
+      if [[ "${OPTARG}" == "testing" ]]; then
+        RELEASE="-testing"
+      fi
       UPDATE=true
       ;;
     o)
