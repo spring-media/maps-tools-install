@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 #needs to increment on every change!!!
-#version: 16
+#version: 17
 
 #initialize variables
 readonly DEFAULT_DOCKER_IMAGE_REGISTRY="ghcr.io/spring-media"
@@ -11,16 +11,16 @@ readonly DEFAULT_DOCKER_IMAGE_TAG_TESTING=testing
 readonly DEFAULT_DOCKER_IMAGE="${DEFAULT_DOCKER_IMAGE_REGISTRY}/${DEFAULT_DOCKER_IMAGE_NAME}:${DEFAULT_DOCKER_IMAGE_TAG}"
 readonly DEFAULT_DOCKER_IMAGE_TESTING="${DEFAULT_DOCKER_IMAGE_REGISTRY}/${DEFAULT_DOCKER_IMAGE_NAME}:${DEFAULT_DOCKER_IMAGE_TAG_TESTING}"
 readonly DEFAULT_DOCKER_USERNAME=k8s
+#deprecated only for adfs
 readonly DEFAULT_TEAM_NAMES="red lean mediasites ott apps mds privacywatch kafka hh"
 USE_DOCKER_IMAGE=false
 DEFAULT_STAGE=$AWS_PROFILE
 USE_AWS_VOLUME=true
 CREATE_DAEMON_CONTAINER=false
 CONTAINER_ATTACH=false
-AZURE_LOGIN=false
-AZURE_LOGIN_ROLE=Developer
-SSO_LOGIN=false
+ADFS_LOGIN=false
 UPDATE=false
+CLEANUP_AWS_CONFIGS=false
 RELEASE=
 USER_NAME=${HOME##*/}
 declare -a ADDITIONAL_CONTAINER_ARGS
@@ -39,8 +39,8 @@ function print_usage() {
   echo '-i: Ask for a local Docker image to use'
   echo '-d: create daemon container that runs in the background, so you can use docker exec to connect to'
   echo '-a: attach to daemon container that previously created with -d option'
-  echo '-l: (EXPERIMENTAL/DEPRECATED) test option to login with AZURE AD, default role is Developer, you can also specify default assume role: Admin, Developer, OnlyViewer after parameter, e.g. -l Admin'
-  echo '-L: (BETA) option to login with AWS SSO AD LOGIN, default role is "NMT-dev", you can also specify default assume role: NMT-admin, NMT-dev, NMT-vieweronly after parameter, e.g. -L NMT-admin'
+  echo '-c: cleanup/delete your actual .aws/config and .aws/credentials files before start, backup of old files will be created .aws/config-$DATE, e.g. .aws/config-20220504123050'
+  echo '-l: (DEPRECATED) use as old ADFS login method'
   echo '-o: add aditional cmd parameter to docker run/create command, IMPORTANT: use double quotes! you can use this option more than one time, e.g. -o "-p 2222:22" -o "-e DISPLAY=host.docker.internal:0"'
   echo '-u: update maps-tools and docker image (force pull), to get testing versions use "-u testing"'
   echo
@@ -60,9 +60,9 @@ function create_docker_run_command() {
       fi
       if [[ "${USE_AWS_VOLUME}" == true ]]
       then
-        docker_string="docker create --name maps-tools ${volumes[*]} -e \"AZURE_LOGIN_ROLE=$AZURE_LOGIN_ROLE\" -e \"SSO_LOGIN_ROLE=$SSO_LOGIN_ROLE\" -e \"DEFAULT_TEAM_NAMES=$DEFAULT_TEAM_NAMES\" -e \"AWS_PROFILE=$DEFAULT_STAGE\" -e \"AZURE_LOGIN=$AZURE_LOGIN\" -e \"SSO_LOGIN=$SSO_LOGIN\" ${ADDITIONAL_CONTAINER_ARGS[@]} --entrypoint \"/init/init_daemon.sh\" $image_name"
+        docker_string="docker create --name maps-tools ${volumes[*]} -e \"CLEANUP_AWS_CONFIGS=$CLEANUP_AWS_CONFIGS\" -e \"DEFAULT_TEAM_NAMES=$DEFAULT_TEAM_NAMES\" -e \"AWS_PROFILE=$DEFAULT_STAGE\" -e \"ADFS_LOGIN=$ADFS_LOGIN\" ${ADDITIONAL_CONTAINER_ARGS[@]} --entrypoint \"/init/init_daemon.sh\" $image_name"
       else
-        docker_string="docker create --name maps-tools ${volumes[1]} -e \"AZURE_LOGIN_ROLE=$AZURE_LOGIN_ROLE\" -e \"SSO_LOGIN_ROLE=$SSO_LOGIN_ROLE\" -e \"DEFAULT_TEAM_NAMES=$DEFAULT_TEAM_NAMES\" -e \"AWS_PROFILE=$DEFAULT_STAGE\" -e \"AZURE_LOGIN=$AZURE_LOGIN\" -e \"SSO_LOGIN=$SSO_LOGIN\" ${ADDITIONAL_CONTAINER_ARGS[@]} --entrypoint \"/init/init_daemon.sh\" $image_name"
+        docker_string="docker create --name maps-tools ${volumes[1]} -e \"CLEANUP_AWS_CONFIGS=$CLEANUP_AWS_CONFIGS\" -e \"DEFAULT_TEAM_NAMES=$DEFAULT_TEAM_NAMES\" -e \"AWS_PROFILE=$DEFAULT_STAGE\" -e \"ADFS_LOGIN=$ADFS_LOGIN\" ${ADDITIONAL_CONTAINER_ARGS[@]} --entrypoint \"/init/init_daemon.sh\" $image_name"
       fi
       ;;
     "$CONTAINER_ATTACH")
@@ -77,9 +77,9 @@ function create_docker_run_command() {
     *)
       if [[ "${USE_AWS_VOLUME}" == true ]]
       then
-        docker_string="docker run -it --rm ${volumes[*]} -e \"AZURE_LOGIN_ROLE=$AZURE_LOGIN_ROLE\" -e \"SSO_LOGIN_ROLE=$SSO_LOGIN_ROLE\" -e \"DEFAULT_TEAM_NAMES=$DEFAULT_TEAM_NAMES\" -e \"AWS_PROFILE=$DEFAULT_STAGE\" -e \"AZURE_LOGIN=$AZURE_LOGIN\" -e \"SSO_LOGIN=$SSO_LOGIN\" ${ADDITIONAL_CONTAINER_ARGS[@]} $image_name"
+        docker_string="docker run -it --rm ${volumes[*]} -e \"CLEANUP_AWS_CONFIGS=$CLEANUP_AWS_CONFIGS\" -e \"DEFAULT_TEAM_NAMES=$DEFAULT_TEAM_NAMES\" -e \"AWS_PROFILE=$DEFAULT_STAGE\" -e \"ADFS_LOGIN=$ADFS_LOGIN\" ${ADDITIONAL_CONTAINER_ARGS[@]} $image_name"
       else
-        docker_string="docker run -it --rm ${volumes[1]} -e \"AZURE_LOGIN_ROLE=$AZURE_LOGIN_ROLE\" -e \"SSO_LOGIN_ROLE=$SSO_LOGIN_ROLE\" -e \"DEFAULT_TEAM_NAMES=$DEFAULT_TEAM_NAMES\" -e \"AWS_PROFILE=$DEFAULT_STAGE\" -e \"AZURE_LOGIN=$AZURE_LOGIN\" -e \"SSO_LOGIN=$SSO_LOGIN\" ${ADDITIONAL_CONTAINER_ARGS[@]} $image_name"
+        docker_string="docker run -it --rm ${volumes[1]} -e \"CLEANUP_AWS_CONFIGS=$CLEANUP_AWS_CONFIGS\" -e \"DEFAULT_TEAM_NAMES=$DEFAULT_TEAM_NAMES\" -e \"AWS_PROFILE=$DEFAULT_STAGE\" -e \"ADFS_LOGIN=$ADFS_LOGIN\" ${ADDITIONAL_CONTAINER_ARGS[@]} $image_name"
       fi
       ;;
   esac
@@ -204,21 +204,10 @@ while getopts "b:o:he:ivdaulL" argument; do
       CONTAINER_ATTACH=true
       ;;
     l)
-      getopts_get_optional_argument $@
-      AZURE_LOGIN_ROLE=${OPTARG}
-      arch=$(uname -m)
-      if [[ "$arch" == "amd64" || "$arch" == "x86_64" ]]; then
-        AZURE_LOGIN=true;
-      else
-        echo "╔═══════════════════════════════════════════════════════════════════════════╗"
-        echo "║⚠️ CPU ARCHITECTURE NOT SUPPORTED FOR AZURE LOGIN! USING ADFS OR SSO INSTEAD║"
-        echo "╚═══════════════════════════════════════════════════════════════════════════╝"
-      fi
+      ADFS_LOGIN=true;
       ;;
-    L)
-      getopts_get_optional_argument $@
-      SSO_LOGIN_ROLE=${OPTARG}
-      SSO_LOGIN=true;
+    c)
+      CLEANUP_AWS_CONFIGS=true;
       ;;
     u)
       getopts_get_optional_argument $@
