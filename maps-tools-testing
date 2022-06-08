@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 #needs to increment on every change!!!
-#version: 17
+#version: 18
 
 #initialize variables
 readonly DEFAULT_DOCKER_IMAGE_REGISTRY="ghcr.io/spring-media"
@@ -20,7 +20,7 @@ CREATE_DAEMON_CONTAINER=false
 CONTAINER_ATTACH=false
 ADFS_LOGIN=false
 UPDATE=false
-CLEANUP_AWS_CONFIGS=false
+CLEANUP_CONFIGS=false
 RELEASE=
 USER_NAME=${HOME##*/}
 declare -a ADDITIONAL_CONTAINER_ARGS
@@ -32,14 +32,14 @@ volumes[4]="-v $HOME/.kube:/home/$DEFAULT_DOCKER_USERNAME/.kube"
 
 function print_usage() {
   echo
-  echo "Usage: $0 [-e] [-v] [-h] [-i]"
-  echo '-e: Environment example (AWS_PROFILE NAME: as-spring-mediasites-stage|as-spring-mediasites-prod)'
+  echo "Usage: $0 [-e] [-v] [-h] [-i] [-d] [-a] [-c] [-l] [-o] [-u]"
+  echo '-e: Environment example (AWS_PROFILE NAME: mediasites-stage.dev|mediasites-prod.admin)'
   echo '-v: DO NOT USE a Docker volume mount for local .aws, .ssh, .helm and .kube configs inside the container.'
   echo '-h: Print this help text'
   echo '-i: Ask for a local Docker image to use'
   echo '-d: create daemon container that runs in the background, so you can use docker exec to connect to'
   echo '-a: attach to daemon container that previously created with -d option'
-  echo '-c: cleanup/delete your actual .aws/config and .aws/credentials files before start, backup of old files will be created .aws/config-$DATE, e.g. .aws/config-20220504123050'
+  echo '-c: cleanup/delete your actual .aws/config, .aws/credentials and .kube/config-* files, backup of old files will be created .aws/config-$DATE, e.g. .aws/config-20220504123050'
   echo '-l: (DEPRECATED) use as old ADFS login method'
   echo '-o: add aditional cmd parameter to docker run/create command, IMPORTANT: use double quotes! you can use this option more than one time, e.g. -o "-p 2222:22" -o "-e DISPLAY=host.docker.internal:0"'
   echo '-u: update maps-tools and docker image (force pull), to get testing versions use "-u testing"'
@@ -60,9 +60,9 @@ function create_docker_run_command() {
       fi
       if [[ "${USE_AWS_VOLUME}" == true ]]
       then
-        docker_string="docker create --name maps-tools ${volumes[*]} -e \"CLEANUP_AWS_CONFIGS=$CLEANUP_AWS_CONFIGS\" -e \"DEFAULT_TEAM_NAMES=$DEFAULT_TEAM_NAMES\" -e \"AWS_PROFILE=$DEFAULT_STAGE\" -e \"ADFS_LOGIN=$ADFS_LOGIN\" ${ADDITIONAL_CONTAINER_ARGS[@]} --entrypoint \"/init/init_daemon.sh\" $image_name"
+        docker_string="docker create --name maps-tools ${volumes[*]} -e \"DEFAULT_TEAM_NAMES=$DEFAULT_TEAM_NAMES\" -e \"AWS_PROFILE=$DEFAULT_STAGE\" -e \"ADFS_LOGIN=$ADFS_LOGIN\" ${ADDITIONAL_CONTAINER_ARGS[@]} --entrypoint \"/init/init_daemon.sh\" $image_name"
       else
-        docker_string="docker create --name maps-tools ${volumes[1]} -e \"CLEANUP_AWS_CONFIGS=$CLEANUP_AWS_CONFIGS\" -e \"DEFAULT_TEAM_NAMES=$DEFAULT_TEAM_NAMES\" -e \"AWS_PROFILE=$DEFAULT_STAGE\" -e \"ADFS_LOGIN=$ADFS_LOGIN\" ${ADDITIONAL_CONTAINER_ARGS[@]} --entrypoint \"/init/init_daemon.sh\" $image_name"
+        docker_string="docker create --name maps-tools ${volumes[1]} -e \"DEFAULT_TEAM_NAMES=$DEFAULT_TEAM_NAMES\" -e \"AWS_PROFILE=$DEFAULT_STAGE\" -e \"ADFS_LOGIN=$ADFS_LOGIN\" ${ADDITIONAL_CONTAINER_ARGS[@]} --entrypoint \"/init/init_daemon.sh\" $image_name"
       fi
       ;;
     "$CONTAINER_ATTACH")
@@ -77,9 +77,9 @@ function create_docker_run_command() {
     *)
       if [[ "${USE_AWS_VOLUME}" == true ]]
       then
-        docker_string="docker run -it --rm ${volumes[*]} -e \"CLEANUP_AWS_CONFIGS=$CLEANUP_AWS_CONFIGS\" -e \"DEFAULT_TEAM_NAMES=$DEFAULT_TEAM_NAMES\" -e \"AWS_PROFILE=$DEFAULT_STAGE\" -e \"ADFS_LOGIN=$ADFS_LOGIN\" ${ADDITIONAL_CONTAINER_ARGS[@]} $image_name"
+        docker_string="docker run -it --rm ${volumes[*]} -e \"DEFAULT_TEAM_NAMES=$DEFAULT_TEAM_NAMES\" -e \"AWS_PROFILE=$DEFAULT_STAGE\" -e \"ADFS_LOGIN=$ADFS_LOGIN\" ${ADDITIONAL_CONTAINER_ARGS[@]} $image_name"
       else
-        docker_string="docker run -it --rm ${volumes[1]} -e \"CLEANUP_AWS_CONFIGS=$CLEANUP_AWS_CONFIGS\" -e \"DEFAULT_TEAM_NAMES=$DEFAULT_TEAM_NAMES\" -e \"AWS_PROFILE=$DEFAULT_STAGE\" -e \"ADFS_LOGIN=$ADFS_LOGIN\" ${ADDITIONAL_CONTAINER_ARGS[@]} $image_name"
+        docker_string="docker run -it --rm ${volumes[1]} -e \"DEFAULT_TEAM_NAMES=$DEFAULT_TEAM_NAMES\" -e \"AWS_PROFILE=$DEFAULT_STAGE\" -e \"ADFS_LOGIN=$ADFS_LOGIN\" ${ADDITIONAL_CONTAINER_ARGS[@]} $image_name"
       fi
       ;;
   esac
@@ -132,8 +132,8 @@ function get_script() {
 
 function install_script() {
   if [ -f /tmp/maps-tools ]; then
-    cp -f /tmp/maps-tools /usr/local/bin/maps-tools 2>&1 >/dev/null || sudo cp -f /tmp/maps-tools /usr/local/bin/maps-tools
-    chmod 755 /usr/local/bin/maps-tools 2>&1 >/dev/null || sudo chmod 755 /usr/local/bin/maps-tools
+    cp -f /tmp/maps-tools /usr/local/bin/maps-tools 1>&- 2>&- || sudo cp -f /tmp/maps-tools /usr/local/bin/maps-tools
+    chmod 755 /usr/local/bin/maps-tools 1>&- 2>&- || sudo chmod 755 /usr/local/bin/maps-tools
   else
     echo "no version of maps-tools found for installation"
     exit 1
@@ -180,8 +180,21 @@ function getopts_get_optional_argument() {
   fi
 }
 
+function cleanup_configs() {
+  [[ -s "${HOME}/.aws/config" ]] && \
+  { echo "safe old ${HOME}/.aws/config to ${HOME}/.aws/config-$(date +%Y%m%d%H%M%S)"; mv -f ${HOME}/.aws/config ${HOME}/.aws/config-$(date +%Y%m%d%H%M%S); }
+  [[ -s "${HOME}/.aws/credentials" ]] && \
+  { echo "safe old ${HOME}/.aws/credentials to ${HOME}/.aws/credentials-$(date +%Y%m%d%H%M%S)"; mv -f ${HOME}/.aws/credentials ${HOME}/.aws/credentials-$(date +%Y%m%d%H%M%S); }
+  [[ -s "${HOME}/.aws/awsctx" ]] && \
+  { echo "safe old ${HOME}/.aws/awsctx to ${HOME}/.aws/awsctx-$(date +%Y%m%d%H%M%S)"; mv -f ${HOME}/.aws/awsctx ${HOME}/.aws/awsctx-$(date +%Y%m%d%H%M%S); }
+  for i in ${HOME}/.kube/config-*; do
+    [[ -s "${i}" ]] && \
+    { echo "safe old ${i} to ${i%/*}/backup-${i##*/}-$(date +%Y%m%d%H%M%S)"; mv -f ${i} ${i%/*}/backup-${i##*/}-$(date +%Y%m%d%H%M%S); }
+  done
+}
+
 # Parse flags
-while getopts "b:o:he:ivdaulL" argument; do
+while getopts "b:o:he:ivdaulc" argument; do
   case "${argument}" in
     b)
       # Will be eventually used for additional BUILD ARGs later. Currently, the only BUILD ARG is directly
@@ -207,7 +220,7 @@ while getopts "b:o:he:ivdaulL" argument; do
       ADFS_LOGIN=true;
       ;;
     c)
-      CLEANUP_AWS_CONFIGS=true;
+      CLEANUP_CONFIGS=true;
       ;;
     u)
       getopts_get_optional_argument $@
@@ -258,12 +271,17 @@ elif [ -x /usr/local/bin/maps-tools ] && [ "${0##*/}" != "maps-tools" ]; then
   exit 0
 fi
 
-#don't use -l and -L options together
-if [[ "${AZURE_LOGIN}" == true && "${SSO_LOGIN}" == true ]]
-  then
-    echo "you cannot use -l and -L Option simultaneously, you need to decide which login option you want"
-    exit 1
-  fi
+#cleanup aws and kube config
+if [[ "$CLEANUP_CONFIGS" == "true" ]]; then
+  while true; do
+    read -p "Are you really sure to cleanup your .aws and .kube config files?" yn
+    case $yn in
+      [Yy]* ) cleanup_configs; break;;
+      * ) echo "nothing clean up"; break;;
+    esac
+  done
+  exit 0
+fi
 
 #check docker is installed
 if [ ! -d "/Applications/Docker.app" ]; then
