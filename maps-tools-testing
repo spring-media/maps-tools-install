@@ -22,6 +22,7 @@ ADFS_LOGIN=false
 UPDATE=false
 CLEANUP_CONFIGS=false
 SESSION_KUBECONFIG=false
+K8S_DASHBOARD=false
 RELEASE=
 USER_NAME=${HOME##*/}
 declare -a ADDITIONAL_CONTAINER_ARGS
@@ -49,6 +50,7 @@ function print_usage() {
   echo '-l: (DEPRECATED) use as old ADFS login method'
   echo '-o: add aditional cmd parameter to docker run/create command, IMPORTANT: use double quotes! you can use this option more than one time, e.g. -o "-p 2222:22" -o "-e DISPLAY=host.docker.internal:0"'
   echo '-u: update maps-tools and docker image (force pull), to get testing versions use "-u testing"'
+  echo '-x: start with kubernetes dashboard http://0.0.0.0:7777/"'
   echo
 
   exit 0
@@ -81,11 +83,18 @@ function create_docker_run_command() {
       fi
       ;;
     *)
+
+      if [[ "${K8S_DASHBOARD}" == true ]]; then
+        dashboard_string=" -p 7777:7777 -e OCTANT_LISTENER_ADDR=0.0.0.0:7777 -e K8S_DASHBOARD=true "
+      else 
+        dashboard_string=" -e K8S_DASHBOARD=false "
+      fi
+
       if [[ "${USE_AWS_VOLUME}" == true ]]
       then
-        docker_string="docker run -it --rm ${volumes[*]} ${ports[*]} -e \"DEFAULT_TEAM_NAMES=$DEFAULT_TEAM_NAMES\" -e \"AWS_PROFILE=$DEFAULT_STAGE\" -e \"ADFS_LOGIN=$ADFS_LOGIN\" -e \"DEFAULT_SESSION_KUBECONFIG=$SESSION_KUBECONFIG\" ${ADDITIONAL_CONTAINER_ARGS[@]} $image_name"
+        docker_string="docker run -it --rm ${volumes[*]} ${ports[*]} ${dashboard_string} -e \"DEFAULT_TEAM_NAMES=$DEFAULT_TEAM_NAMES\" -e \"AWS_PROFILE=$DEFAULT_STAGE\" -e \"ADFS_LOGIN=$ADFS_LOGIN\" -e \"DEFAULT_SESSION_KUBECONFIG=$SESSION_KUBECONFIG\" ${ADDITIONAL_CONTAINER_ARGS[@]} $image_name"
       else
-        docker_string="docker run -it --rm ${volumes[1]} ${ports[*]} -e \"DEFAULT_TEAM_NAMES=$DEFAULT_TEAM_NAMES\" -e \"AWS_PROFILE=$DEFAULT_STAGE\" -e \"ADFS_LOGIN=$ADFS_LOGIN\" -e \"DEFAULT_SESSION_KUBECONFIG=$SESSION_KUBECONFIG\" ${ADDITIONAL_CONTAINER_ARGS[@]} $image_name"
+        docker_string="docker run -it --rm ${volumes[1]} ${ports[*]}  ${dashboard_string} -e \"DEFAULT_TEAM_NAMES=$DEFAULT_TEAM_NAMES\" -e \"AWS_PROFILE=$DEFAULT_STAGE\" -e \"ADFS_LOGIN=$ADFS_LOGIN\" -e \"DEFAULT_SESSION_KUBECONFIG=$SESSION_KUBECONFIG\" ${ADDITIONAL_CONTAINER_ARGS[@]} $image_name"
       fi
       ;;
   esac
@@ -201,7 +210,7 @@ function cleanup_configs() {
 }
 
 # Parse flags
-while getopts "b:o:he:ivdaulcs" argument; do
+while getopts "b:o:he:ivdaulcsx" argument; do
   case "${argument}" in
     b)
       # Will be eventually used for additional BUILD ARGs later. Currently, the only BUILD ARG is directly
@@ -241,6 +250,9 @@ while getopts "b:o:he:ivdaulcs" argument; do
       ;;
     o)
       ADDITIONAL_CONTAINER_ARGS+=("$OPTARG")
+      ;;
+    x)
+      K8S_DASHBOARD=true
       ;;
     h | ? | *)
       print_usage
