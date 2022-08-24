@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 #needs to increment on every change!!!
-#version: 20
+#version: 21
 
 #initialize variables
 readonly DEFAULT_DOCKER_IMAGE_REGISTRY="ghcr.io/spring-media"
@@ -31,6 +31,7 @@ volumes[1]="-v $HOME:/home/$USER_NAME"
 volumes[2]="-v $HOME/.ssh:/home/$DEFAULT_DOCKER_USERNAME/.ssh"
 volumes[3]="-v $HOME/.helm:/home/$DEFAULT_DOCKER_USERNAME/.helm"
 volumes[4]="-v $HOME/.kube:/home/$DEFAULT_DOCKER_USERNAME/.kube"
+volumes[5]="-v $HOME/.spacelift:/home/$DEFAULT_DOCKER_USERNAME/.spacelift"
 ports[0]="-p 8000:8000"
 ports[1]="-p 8001:8001"
 ports[2]="-p 8002:8002"
