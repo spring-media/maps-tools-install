@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 #needs to increment on every change!!!
-#version: 21
+#version: 22
 
 #initialize variables
 readonly DEFAULT_DOCKER_IMAGE_REGISTRY="ghcr.io/spring-media"
@@ -25,6 +25,8 @@ SESSION_KUBECONFIG=false
 K8S_DASHBOARD=false
 RELEASE=
 USER_NAME=${HOME##*/}
+DOCKER_STARTED=false
+
 declare -a ADDITIONAL_CONTAINER_ARGS
 volumes[0]="-v $HOME/.aws:/home/$DEFAULT_DOCKER_USERNAME/.aws"
 volumes[1]="-v $HOME:/home/$USER_NAME"
@@ -307,13 +309,47 @@ if [[ "$CLEANUP_CONFIGS" == "true" ]]; then
 fi
 
 #check docker is installed
-if [ ! -d "/Applications/Docker.app" ]; then
-  echo "Please Install Docker Desktop"
+if [ ! -d "/Applications/Rancher Desktop.app" ] && [ ! -d "/Applications/Docker.app" ]; then
+  echo "Please Install Rancher Desktop or Docker Desktop"
   exit 1
 fi
 
-#check docker is running
-(pgrep -x docker > /dev/null && echo "Docker is running" )|| (echo "Starting Docker" && open /Applications/Docker.app && sleep 20)
+if [ `lsof | grep docker.sock | wc -l` -gt 0 ]; then
+  echo "Docker is running"
+  DOCKER_STARTED=true
+else
+  if [ -e "/Applications/Rancher Desktop.app" ]; then 
+    echo "Starting Rancher Desktop"
+    open /Applications/Rancher\ Desktop.app
+    echo "please use dockerd with Rancher Desktop - containerd is not supported yet"
+  elif [ -e "/Applications/Docker.app" ]; then 
+    echo "Starting Docker Desktop"
+    open /Applications/Docker.app
+  fi
+
+  START_CNT=0
+  STEP_CNT=5
+  MAX_CNT=$((240 / STEP_CNT))
+  while [ $START_CNT -lt $MAX_CNT ]; do
+    sleep $STEP_CNT
+    START_CNT=$((START_CNT++))
+    echo -n "."
+    if [ `lsof | grep docker.sock | wc -l` -gt 0 ]; then
+      echo
+      echo "Docker was started"
+      START_CNT=$((++MAX_CNT))
+      DOCKER_STARTED=true
+      sleep 5
+    fi
+  done
+
+  echo
+  if [ !$DOCKER_STARTED ]; then 
+    echo "Docker couldn't be started"
+  fi
+fi
 
 # Call function to obtain the proper call to docker run
-run_docker_image
+if [ $DOCKER_STARTED ]; then
+  run_docker_image
+fi
