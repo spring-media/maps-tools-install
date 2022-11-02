@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 #needs to increment on every change!!!
-#version: 23
+#version: 26
 
 #initialize variables
 readonly DEFAULT_DOCKER_IMAGE_REGISTRY="ghcr.io/spring-media"
@@ -321,7 +321,7 @@ else
   if [ -e "/Applications/Rancher Desktop.app" ]; then 
     echo "Starting Rancher Desktop"
     open /Applications/Rancher\ Desktop.app
-    echo "please use dockerd with Rancher Desktop - containerd is not supported yet"
+    echo "please use the dockerd runtime with Rancher Desktop - containerd is not supported yet"
   elif [ -e "/Applications/Docker.app" ]; then 
     echo "Starting Docker Desktop"
     open /Applications/Docker.app
