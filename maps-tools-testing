@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 #needs to increment on every change!!!
-#version: 27
+#version: 28
 
 #initialize variables
 readonly DEFAULT_DOCKER_IMAGE_REGISTRY="ghcr.io/spring-media"
@@ -50,6 +50,7 @@ function print_usage() {
   echo '-o: add aditional cmd parameter to docker run/create command, IMPORTANT: use double quotes! you can use this option more than one time, e.g. -o "-p 2222:22" -o "-e DISPLAY=host.docker.internal:0"'
   echo '-u: update maps-tools and docker image (force pull), to get testing versions use "-u testing"'
   echo '-x: start with kubernetes dashboard http://0.0.0.0:7777/"'
+  echo '-s: start a container with individual kube context'
   echo
 
   exit 0
@@ -89,7 +90,7 @@ function create_docker_run_command() {
         dashboard_string=" -e K8S_DASHBOARD=false "
       fi
       
-      if [[ $(nc -z 127.0.0.1 8004 -w2) && $(echo $?) -eq 0 ]]; then
+      if nc -z 127.0.0.1 8004 -w2 ; then
         ports_string=""
       else 
         ports_string="${ports[*]}"
