@@ -39,7 +39,7 @@ ports[4]="-p 8004:8004"
 
 function print_usage() {
   echo
-  echo "Usage: $0 [-e] [-v] [-h] [-i] [-d] [-a] [-c] [-o] [-u]"
+  echo "Usage: $0 [-e] [-v] [-h] [-i] [-d] [-a] [-c] [-o] [-u] [-x] [-s]"
   echo '-e: Environment example (AWS_PROFILE NAME: mediasites-stage.dev|mediasites-prod.admin)'
   echo '-v: DO NOT USE a Docker volume mount for local .aws, .ssh, .helm and .kube configs inside the container.'
   echo '-h: Print this help text'
@@ -49,7 +49,7 @@ function print_usage() {
   echo '-c: cleanup/delete your actual .aws/config, .aws/credentials and .kube/config-* files, backup of old files will be created .aws/config-$DATE, e.g. .aws/config-20220504123050'
   echo '-o: add aditional cmd parameter to docker run/create command, IMPORTANT: use double quotes! you can use this option more than one time, e.g. -o "-p 2222:22" -o "-e DISPLAY=host.docker.internal:0"'
   echo '-u: update maps-tools and docker image (force pull), to get testing versions use "-u testing"'
-  echo '-x: start with kubernetes dashboard http://0.0.0.0:7777/"'
+  echo '-x: start with kubernetes dashboard http://0.0.0.0:7777/'
   echo '-s: start a container with individual kube context'
   echo
 
@@ -60,6 +60,19 @@ function create_docker_run_command() {
   [ $# -ne 1 ] && echo ❌ No image name given to function \"create_docker_run_command\" && return
   local docker_string=""
   local image_name="$1"
+
+  if nc -z 127.0.0.1 8004 -w2 ; then
+    ports_string=""
+  else 
+    ports_string="${ports[*]}"
+  fi
+
+  if [[ "${K8S_DASHBOARD}" == true ]]; then
+    dashboard_string=" -p 7777:7777 -e OCTANT_LISTENER_ADDR=0.0.0.0:7777 -e K8S_DASHBOARD=true "
+  else 
+    dashboard_string=" -e K8S_DASHBOARD=false "
+  fi
+
   case true in
     "$CREATE_DAEMON_CONTAINER")
       if [[ $(docker ps -a --format "{{.Names}}" --filter "name=maps-tools") == "maps-tools" ]]
@@ -68,33 +81,21 @@ function create_docker_run_command() {
       fi
       if [[ "${USE_AWS_VOLUME}" == true ]]
       then
-        docker_string="docker create --name maps-tools ${volumes[*]} ${ports[*]} -e \"AWS_PROFILE=$DEFAULT_STAGE\" -e \"DEFAULT_SESSION_KUBECONFIG=$SESSION_KUBECONFIG\" ${ADDITIONAL_CONTAINER_ARGS[@]} --entrypoint \"/init/init_daemon.sh\" $image_name"
+        docker_string="docker create --name maps-tools ${volumes[*]} ${ports_string[*]} ${dashboard_string} -e \"AWS_PROFILE=$DEFAULT_STAGE\" -e \"DEFAULT_SESSION_KUBECONFIG=$SESSION_KUBECONFIG\" ${ADDITIONAL_CONTAINER_ARGS[@]} --entrypoint \"/init/init_daemon.sh\" $image_name"
       else
-        docker_string="docker create --name maps-tools ${volumes[1]} ${ports[*]} -e \"AWS_PROFILE=$DEFAULT_STAGE\" -e \"DEFAULT_SESSION_KUBECONFIG=$SESSION_KUBECONFIG\" ${ADDITIONAL_CONTAINER_ARGS[@]} --entrypoint \"/init/init_daemon.sh\" $image_name"
+        docker_string="docker create --name maps-tools ${volumes[1]} ${ports_string[*]} ${dashboard_string} -e \"AWS_PROFILE=$DEFAULT_STAGE\" -e \"DEFAULT_SESSION_KUBECONFIG=$SESSION_KUBECONFIG\" ${ADDITIONAL_CONTAINER_ARGS[@]} --entrypoint \"/init/init_daemon.sh\" $image_name"
       fi
       ;;
     "$CONTAINER_ATTACH")
       if [[ $(docker ps --format "{{.Names}}" --filter "name=maps-tools") == "maps-tools" ]]
       then
-        docker_string="docker exec -ti -e \"AWS_PROFILE=$DEFAULT_STAGE\" ${ADDITIONAL_CONTAINER_ARGS[@]} maps-tools /usr/bin/bash --login"
+        docker_string="docker exec -ti -e \"AWS_PROFILE=$DEFAULT_STAGE\" -e \"DEFAULT_SESSION_KUBECONFIG=$SESSION_KUBECONFIG\" ${ADDITIONAL_CONTAINER_ARGS[@]} maps-tools /usr/bin/bash --login"
       elif [[ $(docker ps -a --format "{{.Names}}" --filter "name=maps-tools") == "maps-tools" ]]
       then
-        docker_string="docker start maps-tools; docker exec -ti -e \"AWS_PROFILE=$DEFAULT_STAGE\" ${ADDITIONAL_CONTAINER_ARGS[@]} maps-tools /init/init.sh"
+        docker_string="docker start maps-tools; docker exec -ti -e \"AWS_PROFILE=$DEFAULT_STAGE\" -e \"DEFAULT_SESSION_KUBECONFIG=$SESSION_KUBECONFIG\" ${ADDITIONAL_CONTAINER_ARGS[@]} maps-tools /init/init.sh"
       fi
       ;;
     *)
-
-      if [[ "${K8S_DASHBOARD}" == true ]]; then
-        dashboard_string=" -p 7777:7777 -e OCTANT_LISTENER_ADDR=0.0.0.0:7777 -e K8S_DASHBOARD=true "
-      else 
-        dashboard_string=" -e K8S_DASHBOARD=false "
-      fi
-      
-      if nc -z 127.0.0.1 8004 -w2 ; then
-        ports_string=""
-      else 
-        ports_string="${ports[*]}"
-      fi
 
       if [[ "${USE_AWS_VOLUME}" == true ]]
       then
