@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 #needs to increment on every change!!!
-#version: 29
+#version: 30
 
 #initialize variables
 readonly DEFAULT_DOCKER_IMAGE_REGISTRY="ghcr.io/spring-media"
@@ -61,6 +61,7 @@ function create_docker_run_command() {
   [ $# -ne 1 ] && echo ❌ No image name given to function \"create_docker_run_command\" && return
   local docker_string=""
   local image_name="$1"
+  local start_path=""
 
   if nc -z 127.0.0.1 8004 -w2 ; then
     ports_string=""
@@ -74,6 +75,13 @@ function create_docker_run_command() {
     dashboard_string=" -e K8S_DASHBOARD=false "
   fi
 
+  start_path=$PWD
+  if [[ $start_path =~ "$HOME" ]]; then
+    start_path="${start_path//Users/home}"
+  else
+    start_path="/home/$USER"
+  fi
+
   case true in
     "$CREATE_DAEMON_CONTAINER")
       if [[ $(docker ps -a --format "{{.Names}}" --filter "name=maps-tools") == "maps-tools" ]]
@@ -82,27 +90,27 @@ function create_docker_run_command() {
       fi
       if [[ "${USE_AWS_VOLUME}" == true ]]
       then
-        docker_string="docker create --name maps-tools ${volumes[*]} ${ports_string[*]} ${dashboard_string} -e \"AWS_PROFILE=$DEFAULT_STAGE\" -e \"DEFAULT_SESSION_KUBECONFIG=$SESSION_KUBECONFIG\" ${ADDITIONAL_CONTAINER_ARGS[@]} --entrypoint \"/init/init_daemon.sh\" $image_name"
+        docker_string="docker create --name maps-tools ${volumes[*]} ${ports_string[*]} ${dashboard_string} -e \"START_PATH=$start_path\" -e \"AWS_PROFILE=$DEFAULT_STAGE\" -e \"DEFAULT_SESSION_KUBECONFIG=$SESSION_KUBECONFIG\" -e \"START_PATH=$start_path\" ${ADDITIONAL_CONTAINER_ARGS[@]} --entrypoint \"/init/init_daemon.sh\" $image_name"
       else
-        docker_string="docker create --name maps-tools ${volumes[1]} ${ports_string[*]} ${dashboard_string} -e \"AWS_PROFILE=$DEFAULT_STAGE\" -e \"DEFAULT_SESSION_KUBECONFIG=$SESSION_KUBECONFIG\" ${ADDITIONAL_CONTAINER_ARGS[@]} --entrypoint \"/init/init_daemon.sh\" $image_name"
+        docker_string="docker create --name maps-tools ${volumes[1]} ${ports_string[*]} ${dashboard_string} -e \"START_PATH=$start_path\" -e \"AWS_PROFILE=$DEFAULT_STAGE\" -e \"DEFAULT_SESSION_KUBECONFIG=$SESSION_KUBECONFIG\" -e \"START_PATH=$start_path\" ${ADDITIONAL_CONTAINER_ARGS[@]} --entrypoint \"/init/init_daemon.sh\" $image_name"
       fi
       ;;
     "$CONTAINER_ATTACH")
       if [[ $(docker ps --format "{{.Names}}" --filter "name=maps-tools") == "maps-tools" ]]
       then
-        docker_string="docker exec -ti -e \"AWS_PROFILE=$DEFAULT_STAGE\" -e \"DEFAULT_SESSION_KUBECONFIG=$SESSION_KUBECONFIG\" ${ADDITIONAL_CONTAINER_ARGS[@]} maps-tools /usr/bin/bash --login"
+        docker_string="docker exec -ti -e \"START_PATH=$start_path\" -e \"AWS_PROFILE=$DEFAULT_STAGE\" -e \"DEFAULT_SESSION_KUBECONFIG=$SESSION_KUBECONFIG\" ${ADDITIONAL_CONTAINER_ARGS[@]} maps-tools /usr/bin/bash --login"
       elif [[ $(docker ps -a --format "{{.Names}}" --filter "name=maps-tools") == "maps-tools" ]]
       then
-        docker_string="docker start maps-tools; docker exec -ti -e \"AWS_PROFILE=$DEFAULT_STAGE\" -e \"DEFAULT_SESSION_KUBECONFIG=$SESSION_KUBECONFIG\" ${ADDITIONAL_CONTAINER_ARGS[@]} maps-tools /init/init.sh"
+        docker_string="docker start maps-tools; docker exec -ti -e \"START_PATH=$start_path\" -e \"AWS_PROFILE=$DEFAULT_STAGE\" -e \"DEFAULT_SESSION_KUBECONFIG=$SESSION_KUBECONFIG\" ${ADDITIONAL_CONTAINER_ARGS[@]} maps-tools /init/init.sh"
       fi
       ;;
     *)
 
       if [[ "${USE_AWS_VOLUME}" == true ]]
       then
-        docker_string="docker run -it --rm ${volumes[*]} ${ports_string[*]} ${dashboard_string} -e \"AWS_PROFILE=$DEFAULT_STAGE\" -e \"DEFAULT_SESSION_KUBECONFIG=$SESSION_KUBECONFIG\" ${ADDITIONAL_CONTAINER_ARGS[@]} $image_name"
+        docker_string="docker run -it --rm ${volumes[*]} ${ports_string[*]} ${dashboard_string} -e \"START_PATH=$start_path\" -e \"AWS_PROFILE=$DEFAULT_STAGE\" -e \"DEFAULT_SESSION_KUBECONFIG=$SESSION_KUBECONFIG\" ${ADDITIONAL_CONTAINER_ARGS[@]} $image_name"
       else
-        docker_string="docker run -it --rm ${volumes[1]} ${ports_string[*]}  ${dashboard_string} -e \"AWS_PROFILE=$DEFAULT_STAGE\" -e \"DEFAULT_SESSION_KUBECONFIG=$SESSION_KUBECONFIG\" ${ADDITIONAL_CONTAINER_ARGS[@]} $image_name"
+        docker_string="docker run -it --rm ${volumes[1]} ${ports_string[*]}  ${dashboard_string} -e \"START_PATH=$start_path\" -e \"AWS_PROFILE=$DEFAULT_STAGE\" -e \"DEFAULT_SESSION_KUBECONFIG=$SESSION_KUBECONFIG\" ${ADDITIONAL_CONTAINER_ARGS[@]} $image_name"
       fi
       ;;
   esac
@@ -126,6 +134,7 @@ function run_docker_image() {
         if (( $REPLY >= 1 && $REPLY < (( "${#docker_images[@]}" + 1)) )); then
           local image="${docker_images[(($REPLY - 1))]}"
           local docker_run_command="$(create_docker_run_command "$image")"
+          echo $docker_run_command
           eval $docker_run_command
         else
           echo ❌ Invalid choice && exit 1
@@ -135,6 +144,7 @@ function run_docker_image() {
       ;;
     *)
       local docker_run_command="$(create_docker_run_command "$image")"
+      echo $docker_run_command
       eval $docker_run_command
     ;;
   esac
