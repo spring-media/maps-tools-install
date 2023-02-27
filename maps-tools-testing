@@ -37,6 +37,8 @@ ports[1]="-p 8001:8001"
 ports[2]="-p 8002:8002"
 ports[3]="-p 8003:8003"
 ports[4]="-p 8004:8004"
+[ ! -f ~/.terraformrc ] && touch ~/.terraformrc
+[ ! -d ~/.spacelift ] && mkdir ~/.spacelift
 
 function print_usage() {
   echo
