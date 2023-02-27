@@ -136,7 +136,6 @@ function run_docker_image() {
         if (( $REPLY >= 1 && $REPLY < (( "${#docker_images[@]}" + 1)) )); then
           local image="${docker_images[(($REPLY - 1))]}"
           local docker_run_command="$(create_docker_run_command "$image")"
-          echo $docker_run_command
           eval $docker_run_command
         else
           echo ❌ Invalid choice && exit 1
@@ -146,7 +145,6 @@ function run_docker_image() {
       ;;
     *)
       local docker_run_command="$(create_docker_run_command "$image")"
-      echo $docker_run_command
       eval $docker_run_command
     ;;
   esac
