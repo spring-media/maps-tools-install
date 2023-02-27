@@ -92,9 +92,9 @@ function create_docker_run_command() {
       fi
       if [[ "${USE_AWS_VOLUME}" == true ]]
       then
-        docker_string="docker create --name maps-tools ${volumes[*]} ${ports_string[*]} ${dashboard_string} -e \"START_PATH=$start_path\" -e \"AWS_PROFILE=$DEFAULT_STAGE\" -e \"DEFAULT_SESSION_KUBECONFIG=$SESSION_KUBECONFIG\" -e \"START_PATH=$start_path\" ${ADDITIONAL_CONTAINER_ARGS[@]} --entrypoint \"/init/init_daemon.sh\" $image_name"
+        docker_string="docker create --name maps-tools ${volumes[*]} ${ports_string[*]} ${dashboard_string} -e \"AWS_PROFILE=$DEFAULT_STAGE\" -e \"DEFAULT_SESSION_KUBECONFIG=$SESSION_KUBECONFIG\" -e \"START_PATH=$start_path\" ${ADDITIONAL_CONTAINER_ARGS[@]} --entrypoint \"/init/init_daemon.sh\" $image_name"
       else
-        docker_string="docker create --name maps-tools ${volumes[1]} ${ports_string[*]} ${dashboard_string} -e \"START_PATH=$start_path\" -e \"AWS_PROFILE=$DEFAULT_STAGE\" -e \"DEFAULT_SESSION_KUBECONFIG=$SESSION_KUBECONFIG\" -e \"START_PATH=$start_path\" ${ADDITIONAL_CONTAINER_ARGS[@]} --entrypoint \"/init/init_daemon.sh\" $image_name"
+        docker_string="docker create --name maps-tools ${volumes[1]} ${ports_string[*]} ${dashboard_string} -e \"AWS_PROFILE=$DEFAULT_STAGE\" -e \"DEFAULT_SESSION_KUBECONFIG=$SESSION_KUBECONFIG\" -e \"START_PATH=$start_path\" ${ADDITIONAL_CONTAINER_ARGS[@]} --entrypoint \"/init/init_daemon.sh\" $image_name"
       fi
       ;;
     "$CONTAINER_ATTACH")
