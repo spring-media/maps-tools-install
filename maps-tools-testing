@@ -116,6 +116,7 @@ function create_docker_run_command() {
       fi
       ;;
   esac
+  echo "$docker_string"
 }
 
 function run_docker_image() {
