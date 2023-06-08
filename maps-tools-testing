@@ -43,7 +43,7 @@ ports[4]="-p 8004:8004"
 
 function print_usage() {
   echo
-  echo "Usage: $0 [-e] [-v] [-h] [-i] [-d] [-a] [-c] [-o] [-u] [-x] [-s]"
+  echo "Usage: $0 [-e] [-v] [-h] [-i] [-d] [-a] [-c] [-o] [-u] [-x] [-s] [-r]"
   echo '-e: Environment example (AWS_PROFILE NAME: mediasites-stage.dev|mediasites-prod.admin)'
   echo '-v: DO NOT USE a Docker volume mount for local .aws, .ssh, .helm and .kube configs inside the container.'
   echo '-h: Print this help text'
@@ -55,6 +55,8 @@ function print_usage() {
   echo '-u: update maps-tools and docker image (force pull), to get testing versions use "-u testing"'
   echo '-x: start with kubernetes dashboard http://0.0.0.0:7777/'
   echo '-s: start a container with individual kube context'
+  echo '-r: Use AAD Auth for kubectl'
+
   echo
 
   exit 0
