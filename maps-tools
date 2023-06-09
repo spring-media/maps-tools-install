@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 #needs to increment on every change!!!
-#version: 30
+#version: 31
 
 #initialize variables
 readonly DEFAULT_DOCKER_IMAGE_REGISTRY="ghcr.io/spring-media"
@@ -23,6 +23,7 @@ K8S_DASHBOARD=false
 RELEASE=
 USER_NAME=${HOME##*/}
 DOCKER_STARTED=false
+aad=false
 
 declare -a ADDITIONAL_CONTAINER_ARGS
 volumes[0]="-v $HOME/.aws:/home/$DEFAULT_DOCKER_USERNAME/.aws"
@@ -42,7 +43,7 @@ ports[4]="-p 8004:8004"
 
 function print_usage() {
   echo
-  echo "Usage: $0 [-e] [-v] [-h] [-i] [-d] [-a] [-c] [-o] [-u] [-x] [-s]"
+  echo "Usage: $0 [-e] [-v] [-h] [-i] [-d] [-a] [-c] [-o] [-u] [-x] [-s] [-r]"
   echo '-e: Environment example (AWS_PROFILE NAME: mediasites-stage.dev|mediasites-prod.admin)'
   echo '-v: DO NOT USE a Docker volume mount for local .aws, .ssh, .helm and .kube configs inside the container.'
   echo '-h: Print this help text'
@@ -54,6 +55,8 @@ function print_usage() {
   echo '-u: update maps-tools and docker image (force pull), to get testing versions use "-u testing"'
   echo '-x: start with kubernetes dashboard http://0.0.0.0:7777/'
   echo '-s: start a container with individual kube context'
+  echo '-r: Use AAD Auth for kubectl'
+
   echo
 
   exit 0
@@ -106,6 +109,9 @@ function create_docker_run_command() {
         docker_string="docker start maps-tools; docker exec -ti -e \"START_PATH=$start_path\" -e \"AWS_PROFILE=$DEFAULT_STAGE\" -e \"DEFAULT_SESSION_KUBECONFIG=$SESSION_KUBECONFIG\" ${ADDITIONAL_CONTAINER_ARGS[@]} maps-tools /init/init.sh"
       fi
       ;;
+     "$aad")
+        docker_string="docker run -it --rm ${volumes[*]} ${ports_string[*]}  ${dashboard_string} -e \"START_PATH=$start_path\" -e \"AWS_PROFILE=$DEFAULT_STAGE\" -e \"DEFAULT_SESSION_KUBECONFIG=$SESSION_KUBECONFIG\" ${ADDITIONAL_CONTAINER_ARGS[@]} --entrypoint \"/init/init-aad.sh\" $image_name"
+      ;;
     *)
 
       if [[ "${USE_AWS_VOLUME}" == true ]]
@@ -121,7 +127,13 @@ function create_docker_run_command() {
 
 function run_docker_image() {
   local image=${DEFAULT_DOCKER_IMAGE}
-  printf "ENVIRONMENT: %s\n\n" "${DEFAULT_STAGE}"
+  if [[ "${aad}" == true ]]; then
+    printf "Your using AAD login\n"
+    printf "ENVIRONMENT: %s\n\n" "${DEFAULT_STAGE}"
+
+  else
+    printf "ENVIRONMENT: %s\n\n" "${DEFAULT_STAGE}"
+  fi
   if [[ "${CREATE_DAEMON_CONTAINER}" == true && "${CONTAINER_ATTACH}" == true ]]
   then
     echo "you cannot use -d and -a Option simultaneously"
@@ -228,7 +240,7 @@ function cleanup_configs() {
 }
 
 # Parse flags
-while getopts "b:o:he:ivdaucsx" argument; do
+while getopts "b:o:he:ivdaucsxr" argument; do
   case "${argument}" in
     b)
       # Will be eventually used for additional BUILD ARGs later. Currently, the only BUILD ARG is directly
@@ -269,6 +281,10 @@ while getopts "b:o:he:ivdaucsx" argument; do
     x)
       K8S_DASHBOARD=true
       ;;
+    r)
+      aad=true
+      ;;
+    
     h | ? | *)
       print_usage
       ;;
