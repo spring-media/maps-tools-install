@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 #needs to increment on every change!!!
-#version: 32
+#version: 33
 
 #initialize variables
 readonly DEFAULT_DOCKER_IMAGE_REGISTRY="ghcr.io/spring-media"
@@ -324,8 +324,7 @@ fi
 
 #check docker is installed
 if [ ! -d "/Applications/Rancher Desktop.app" ] && [ ! -d "/Applications/Docker.app" ]; then
-  echo "Please Install Rancher Desktop or Docker Desktop"
-  exit 1
+  echo "No Rancher Desktop or Docker Desktop found, only these are official supported"
 fi
 
 if [ `lsof -U | grep docker.sock | wc -l` -gt 0 ]; then
