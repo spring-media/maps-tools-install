@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 #needs to increment on every change!!!
-#version: 33
+#version: 34
 
 #initialize variables
 readonly DEFAULT_DOCKER_IMAGE_REGISTRY="ghcr.io/spring-media"
@@ -32,11 +32,28 @@ volumes[3]="-v $HOME/.helm:/home/$DEFAULT_DOCKER_USERNAME/.helm"
 volumes[4]="-v $HOME/.kube:/home/$DEFAULT_DOCKER_USERNAME/.kube"
 volumes[5]="-v $HOME/.spacelift:/home/$DEFAULT_DOCKER_USERNAME/.spacelift"
 volumes[6]="-v $HOME/.terraformrc:/home/$DEFAULT_DOCKER_USERNAME/.terraformrc"
-ports[0]="-p 8000:8000"
-ports[1]="-p 8001:8001"
-ports[2]="-p 8002:8002"
-ports[3]="-p 8003:8003"
-ports[4]="-p 8004:8004"
+
+declare -a ports
+
+# select 5 random ports that are not in use from range 8000-8999
+for i in {8000..8999}
+do
+  if nc -z 127.0.0.1 ${i} -w2 2>/dev/null ; then
+    if [ "${i}" == "8999" ] ; then
+      echo "all local ports 8000-8999 are in use"
+      exit
+    else
+      continue
+    fi
+  else
+    ports+=("-p ${i}:${i}")
+  fi
+
+  if [ "${#ports[@]}" == "5" ]; then
+    break
+  fi
+done
+
 [ ! -f ~/.terraformrc ] && touch ~/.terraformrc
 [ ! -d ~/.spacelift ] && mkdir ~/.spacelift
 
@@ -66,7 +83,7 @@ function create_docker_run_command() {
   local image_name="$1"
   local start_path=""
 
-  if nc -z 127.0.0.1 8004 -w2 ; then
+  if [ "${#ports[@]}" == "0" ]; then
     ports_string=""
   else 
     ports_string="${ports[*]}"
