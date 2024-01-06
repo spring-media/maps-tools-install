@@ -46,7 +46,7 @@ do
       continue
     fi
   else
-    ports+=("-p ${i}:${i}")
+    ports+=("${i}")
   fi
 
   if [ "${#ports[@]}" == "5" ]; then
@@ -85,8 +85,11 @@ function create_docker_run_command() {
 
   if [ "${#ports[@]}" == "0" ]; then
     ports_string=""
-  else 
-    ports_string="${ports[*]}"
+  else
+    for value in "${ports[@]}"; do
+      ports_string+="-p ${value}:${value} "
+      port_variable+="${value} "
+    done
   fi
 
   if [[ "${K8S_DASHBOARD}" == true ]]; then
@@ -110,9 +113,9 @@ function create_docker_run_command() {
       fi
       if [[ "${USE_AWS_VOLUME}" == true ]]
       then
-        docker_string="docker create --name maps-tools ${volumes[*]} ${ports_string[*]} ${dashboard_string} -e \"AWS_PROFILE=$DEFAULT_STAGE\" -e \"DEFAULT_SESSION_KUBECONFIG=$SESSION_KUBECONFIG\" -e \"START_PATH=$start_path\" ${ADDITIONAL_CONTAINER_ARGS[@]} --entrypoint \"/init/init_daemon.sh\" $image_name"
+        docker_string="docker create --name maps-tools ${volumes[*]} ${ports_string} ${dashboard_string} -e \"PORT_VARIABLE=$port_variable\" -e \"AWS_PROFILE=$DEFAULT_STAGE\" -e \"DEFAULT_SESSION_KUBECONFIG=$SESSION_KUBECONFIG\" -e \"START_PATH=$start_path\" ${ADDITIONAL_CONTAINER_ARGS[@]} --entrypoint \"/init/init_daemon.sh\" $image_name"
       else
-        docker_string="docker create --name maps-tools ${volumes[1]} ${ports_string[*]} ${dashboard_string} -e \"AWS_PROFILE=$DEFAULT_STAGE\" -e \"DEFAULT_SESSION_KUBECONFIG=$SESSION_KUBECONFIG\" -e \"START_PATH=$start_path\" ${ADDITIONAL_CONTAINER_ARGS[@]} --entrypoint \"/init/init_daemon.sh\" $image_name"
+        docker_string="docker create --name maps-tools ${volumes[1]} ${ports_string} ${dashboard_string} -e \"PORT_VARIABLE=$port_variable\" -e \"AWS_PROFILE=$DEFAULT_STAGE\" -e \"DEFAULT_SESSION_KUBECONFIG=$SESSION_KUBECONFIG\" -e \"START_PATH=$start_path\" ${ADDITIONAL_CONTAINER_ARGS[@]} --entrypoint \"/init/init_daemon.sh\" $image_name"
       fi
       ;;
     "$CONTAINER_ATTACH")
@@ -128,9 +131,9 @@ function create_docker_run_command() {
 
       if [[ "${USE_AWS_VOLUME}" == true ]]
       then
-        docker_string="docker run -it --rm ${volumes[*]} ${ports_string[*]} ${dashboard_string} -e \"START_PATH=$start_path\" -e \"AWS_PROFILE=$DEFAULT_STAGE\" -e \"DEFAULT_SESSION_KUBECONFIG=$SESSION_KUBECONFIG\" ${ADDITIONAL_CONTAINER_ARGS[@]} $image_name"
+        docker_string="docker run -it --rm ${volumes[*]} ${ports_string} ${dashboard_string} -e \"PORT_VARIABLE=$port_variable\" -e \"START_PATH=$start_path\" -e \"AWS_PROFILE=$DEFAULT_STAGE\" -e \"DEFAULT_SESSION_KUBECONFIG=$SESSION_KUBECONFIG\" ${ADDITIONAL_CONTAINER_ARGS[@]} $image_name"
       else
-        docker_string="docker run -it --rm ${volumes[1]} ${ports_string[*]}  ${dashboard_string} -e \"START_PATH=$start_path\" -e \"AWS_PROFILE=$DEFAULT_STAGE\" -e \"DEFAULT_SESSION_KUBECONFIG=$SESSION_KUBECONFIG\" ${ADDITIONAL_CONTAINER_ARGS[@]} $image_name"
+        docker_string="docker run -it --rm ${volumes[1]} ${ports_string}  ${dashboard_string} -e \"PORT_VARIABLE=$port_variable\" -e \"START_PATH=$start_path\" -e \"AWS_PROFILE=$DEFAULT_STAGE\" -e \"DEFAULT_SESSION_KUBECONFIG=$SESSION_KUBECONFIG\" ${ADDITIONAL_CONTAINER_ARGS[@]} $image_name"
       fi
       ;;
   esac
