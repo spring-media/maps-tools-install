@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 #needs to increment on every change!!!
-#version: 32
+#version: 34
 
 #initialize variables
 readonly DEFAULT_DOCKER_IMAGE_REGISTRY="ghcr.io/spring-media"
@@ -32,11 +32,28 @@ volumes[3]="-v $HOME/.helm:/home/$DEFAULT_DOCKER_USERNAME/.helm"
 volumes[4]="-v $HOME/.kube:/home/$DEFAULT_DOCKER_USERNAME/.kube"
 volumes[5]="-v $HOME/.spacelift:/home/$DEFAULT_DOCKER_USERNAME/.spacelift"
 volumes[6]="-v $HOME/.terraformrc:/home/$DEFAULT_DOCKER_USERNAME/.terraformrc"
-ports[0]="-p 8000:8000"
-ports[1]="-p 8001:8001"
-ports[2]="-p 8002:8002"
-ports[3]="-p 8003:8003"
-ports[4]="-p 8004:8004"
+
+declare -a ports
+
+# select 5 random ports that are not in use from range 8000-8999
+for i in {8000..8999}
+do
+  if nc -z 127.0.0.1 ${i} -w2 2>/dev/null ; then
+    if [ "${i}" == "8999" ] ; then
+      echo "all local ports 8000-8999 are in use"
+      exit
+    else
+      continue
+    fi
+  else
+    ports+=("${i}")
+  fi
+
+  if [ "${#ports[@]}" == "5" ]; then
+    break
+  fi
+done
+
 [ ! -f ~/.terraformrc ] && touch ~/.terraformrc
 [ ! -d ~/.spacelift ] && mkdir ~/.spacelift
 
@@ -66,10 +83,13 @@ function create_docker_run_command() {
   local image_name="$1"
   local start_path=""
 
-  if nc -z 127.0.0.1 8004 -w2 ; then
+  if [ "${#ports[@]}" == "0" ]; then
     ports_string=""
-  else 
-    ports_string="${ports[*]}"
+  else
+    for value in "${ports[@]}"; do
+      ports_string+="-p ${value}:${value} "
+      port_variable+="${value} "
+    done
   fi
 
   if [[ "${K8S_DASHBOARD}" == true ]]; then
@@ -93,9 +113,9 @@ function create_docker_run_command() {
       fi
       if [[ "${USE_AWS_VOLUME}" == true ]]
       then
-        docker_string="docker create --name maps-tools ${volumes[*]} ${ports_string[*]} ${dashboard_string} -e \"AWS_PROFILE=$DEFAULT_STAGE\" -e \"DEFAULT_SESSION_KUBECONFIG=$SESSION_KUBECONFIG\" -e \"START_PATH=$start_path\" ${ADDITIONAL_CONTAINER_ARGS[@]} --entrypoint \"/init/init_daemon.sh\" $image_name"
+        docker_string="docker create --name maps-tools ${volumes[*]} ${ports_string} ${dashboard_string} -e \"PORT_VARIABLE=$port_variable\" -e \"AWS_PROFILE=$DEFAULT_STAGE\" -e \"DEFAULT_SESSION_KUBECONFIG=$SESSION_KUBECONFIG\" -e \"START_PATH=$start_path\" ${ADDITIONAL_CONTAINER_ARGS[@]} --entrypoint \"/init/init_daemon.sh\" $image_name"
       else
-        docker_string="docker create --name maps-tools ${volumes[1]} ${ports_string[*]} ${dashboard_string} -e \"AWS_PROFILE=$DEFAULT_STAGE\" -e \"DEFAULT_SESSION_KUBECONFIG=$SESSION_KUBECONFIG\" -e \"START_PATH=$start_path\" ${ADDITIONAL_CONTAINER_ARGS[@]} --entrypoint \"/init/init_daemon.sh\" $image_name"
+        docker_string="docker create --name maps-tools ${volumes[1]} ${ports_string} ${dashboard_string} -e \"PORT_VARIABLE=$port_variable\" -e \"AWS_PROFILE=$DEFAULT_STAGE\" -e \"DEFAULT_SESSION_KUBECONFIG=$SESSION_KUBECONFIG\" -e \"START_PATH=$start_path\" ${ADDITIONAL_CONTAINER_ARGS[@]} --entrypoint \"/init/init_daemon.sh\" $image_name"
       fi
       ;;
     "$CONTAINER_ATTACH")
@@ -111,9 +131,9 @@ function create_docker_run_command() {
 
       if [[ "${USE_AWS_VOLUME}" == true ]]
       then
-        docker_string="docker run -it --rm ${volumes[*]} ${ports_string[*]} ${dashboard_string} -e \"START_PATH=$start_path\" -e \"AWS_PROFILE=$DEFAULT_STAGE\" -e \"DEFAULT_SESSION_KUBECONFIG=$SESSION_KUBECONFIG\" ${ADDITIONAL_CONTAINER_ARGS[@]} $image_name"
+        docker_string="docker run -it --rm ${volumes[*]} ${ports_string} ${dashboard_string} -e \"PORT_VARIABLE=$port_variable\" -e \"START_PATH=$start_path\" -e \"AWS_PROFILE=$DEFAULT_STAGE\" -e \"DEFAULT_SESSION_KUBECONFIG=$SESSION_KUBECONFIG\" ${ADDITIONAL_CONTAINER_ARGS[@]} $image_name"
       else
-        docker_string="docker run -it --rm ${volumes[1]} ${ports_string[*]}  ${dashboard_string} -e \"START_PATH=$start_path\" -e \"AWS_PROFILE=$DEFAULT_STAGE\" -e \"DEFAULT_SESSION_KUBECONFIG=$SESSION_KUBECONFIG\" ${ADDITIONAL_CONTAINER_ARGS[@]} $image_name"
+        docker_string="docker run -it --rm ${volumes[1]} ${ports_string}  ${dashboard_string} -e \"PORT_VARIABLE=$port_variable\" -e \"START_PATH=$start_path\" -e \"AWS_PROFILE=$DEFAULT_STAGE\" -e \"DEFAULT_SESSION_KUBECONFIG=$SESSION_KUBECONFIG\" ${ADDITIONAL_CONTAINER_ARGS[@]} $image_name"
       fi
       ;;
   esac
@@ -324,8 +344,7 @@ fi
 
 #check docker is installed
 if [ ! -d "/Applications/Rancher Desktop.app" ] && [ ! -d "/Applications/Docker.app" ]; then
-  echo "Please Install Rancher Desktop or Docker Desktop"
-  exit 1
+  echo "No Rancher Desktop or Docker Desktop found, only these are official supported"
 fi
 
 if [ `lsof -U | grep docker.sock | wc -l` -gt 0 ]; then
