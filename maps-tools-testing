@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 #needs to increment on every change!!!
-#version: 35
+#version: 36
 
 #initialize variables
 readonly DEFAULT_DOCKER_IMAGE_REGISTRY="ghcr.io/spring-media"
@@ -242,6 +242,8 @@ function cleanup_configs() {
   { echo "safe old ${HOME}/.aws/credentials to ${HOME}/.aws/credentials-$(date +%Y%m%d%H%M%S)"; mv -f ${HOME}/.aws/credentials ${HOME}/.aws/credentials-$(date +%Y%m%d%H%M%S); }
   [[ -s "${HOME}/.aws/awsctx" ]] && \
   { echo "safe old ${HOME}/.aws/awsctx to ${HOME}/.aws/awsctx-$(date +%Y%m%d%H%M%S)"; mv -f ${HOME}/.aws/awsctx ${HOME}/.aws/awsctx-$(date +%Y%m%d%H%M%S); }
+  [[ -s "${HOME}/.kube/config" ]] && \
+  { echo "safe old ${HOME}/.kube/config to ${HOME}/.kube/config-$(date +%Y%m%d%H%M%S)"; mv -f ${HOME}/.kube/config ${HOME}/.kube/config-$(date +%Y%m%d%H%M%S); }
   for i in ${HOME}/.kube/*config-*; do
     [[ -s "${i}" ]] && \
     { echo "safe old ${i} to ${i%/*}/backup-${i#*/*config-}-$(date +%Y%m%d%H%M%S)"; mv -f ${i} ${i%/*}/backup-${i#*/*config-}-$(date +%Y%m%d%H%M%S); }
