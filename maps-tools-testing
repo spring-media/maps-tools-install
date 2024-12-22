@@ -1,15 +1,13 @@
 #!/usr/bin/env bash
 
 #needs to increment on every change!!!
-#version: 37
-
+#version: 39
 #initialize variables
 readonly DEFAULT_DOCKER_IMAGE_REGISTRY="ghcr.io/spring-media"
 readonly DEFAULT_DOCKER_IMAGE_NAME=maps-tools
 readonly DEFAULT_DOCKER_IMAGE_TAG=latest
 readonly DEFAULT_DOCKER_IMAGE_TAG_TESTING=testing
-readonly DEFAULT_DOCKER_IMAGE="${DEFAULT_DOCKER_IMAGE_REGISTRY}/${DEFAULT_DOCKER_IMAGE_NAME}:${DEFAULT_DOCKER_IMAGE_TAG}"
-readonly DEFAULT_DOCKER_IMAGE_TESTING="${DEFAULT_DOCKER_IMAGE_REGISTRY}/${DEFAULT_DOCKER_IMAGE_NAME}:${DEFAULT_DOCKER_IMAGE_TAG_TESTING}"
+readonly DEFAULT_DOCKER_IMAGE="${DEFAULT_DOCKER_IMAGE_REGISTRY}/${DEFAULT_DOCKER_IMAGE_NAME}"
 readonly DEFAULT_DOCKER_USERNAME=k8s
 USE_DOCKER_IMAGE=false
 DEFAULT_STAGE=$AWS_PROFILE
@@ -135,7 +133,7 @@ function create_docker_run_command() {
 }
 
 function run_docker_image() {
-  local image=${DEFAULT_DOCKER_IMAGE}
+  local image=${DEFAULT_DOCKER_IMAGE}:${DEFAULT_DOCKER_IMAGE_TAG}
 
   if [[ "${CREATE_DAEMON_CONTAINER}" == true && "${CONTAINER_ATTACH}" == true ]]; then
     echo "you cannot use -d and -a Option simultaneously"
@@ -198,16 +196,18 @@ function check_for_updates() {
     local version=$(grep -m 1 "#version:" /usr/local/bin/maps-tools | awk '{print $2}')
     local new_version=$(grep -m 1 "#version:" /tmp/maps-tools | awk '{print $2}')
     if [ ${version} -lt ${new_version} ]; then
-      echo "upgrading maps-tools to version ${new_version}"
-
       read -p "There is a new version of maps-tools available. Do you want to update maps-tools and docker image? (y/n)" yn
       if [ "$yn" == "y" ]; then
+        echo "upgrading maps-tools to version ${new_version}"
         install_script
         docker_pull
       fi
     else
-      if [[ $RELEASE = "-testing" ]]; then
-        docker pull ${DEFAULT_DOCKER_IMAGE_TESTING}
+      if [[ $RELEASE = "testing" ]]; then
+        docker pull ${DEFAULT_DOCKER_IMAGE}:${DEFAULT_DOCKER_IMAGE_TAG_TESTING}
+      elif [[ -n $RELEASE ]]; then
+        RELEASE_CUT=$(echo "$RELEASE" | sed 's/^-//')
+        docker pull ${DEFAULT_DOCKER_IMAGE}:${RELEASE_CUT}
       fi
       echo "no upgrade available for maps-tools"
     fi
@@ -226,9 +226,9 @@ function cleanup_tmp() {
 
 function docker_pull() {
   if [[ -z $RELEASE ]]; then
-    docker pull ${DEFAULT_DOCKER_IMAGE}
+    docker pull ${DEFAULT_DOCKER_IMAGE}:$RELEASE
   elif [[ -n $RELEASE ]]; then
-    docker pull ${DEFAULT_DOCKER_IMAGE_TESTING}
+    docker pull ${DEFAULT_DOCKER_IMAGE}:$RELEASE
   fi
 }
 
@@ -305,6 +305,8 @@ while getopts "b:o:he:ivdaucsx" argument; do
     getopts_get_optional_argument $@
     if [[ "${OPTARG}" == "testing" ]]; then
       RELEASE="-testing"
+    else
+      RELEASE="-${OPTARG}"
     fi
     UPDATE=true
     ;;
