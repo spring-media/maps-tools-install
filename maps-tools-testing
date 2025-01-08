@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 #needs to increment on every change!!!
-#version: 40
+#version: 41
 #initialize variables
 readonly DEFAULT_DOCKER_IMAGE_REGISTRY="ghcr.io/spring-media"
 readonly DEFAULT_DOCKER_IMAGE_NAME=maps-tools
@@ -181,7 +181,7 @@ function get_script() {
 
 function install_script() {
   if [ -f /tmp/maps-tools ]; then
-    echo "If ask, enter your AD password to install maps-tools into /usr/local/bin/maps-tools"
+    echo "If asked, enter your AD password to install maps-tools into /usr/local/bin/maps-tools"
     cp -f /tmp/maps-tools /usr/local/bin/maps-tools 1>&- 2>&- || sudo cp -f /tmp/maps-tools /usr/local/bin/maps-tools
     chmod 755 /usr/local/bin/maps-tools 1>&- 2>&- || sudo chmod 755 /usr/local/bin/maps-tools
   else
@@ -200,8 +200,17 @@ function check_for_updates() {
       if [ "$yn" == "y" ]; then
         echo "upgrading maps-tools to version ${new_version}"
         install_script
-        docker_pull
+        if [[ $RELEASE = "testing" ]]; then
+          docker pull ${DEFAULT_DOCKER_IMAGE}:${DEFAULT_DOCKER_IMAGE_TAG_TESTING}
+        elif [[ -n $RELEASE ]]; then
+          RELEASE_CUT=$(echo "$RELEASE" | sed 's/^-//')
+          echo "pulling docker image ${DEFAULT_DOCKER_IMAGE}:${RELEASE_CUT}"
+          docker pull ${DEFAULT_DOCKER_IMAGE}:${RELEASE_CUT}
+        fi
+      else
+        echo "Continuing with current version of maps-tools"
       fi
+      echo "no upgrade available for maps-tools"
     else
       if [[ $RELEASE = "testing" ]]; then
         docker pull ${DEFAULT_DOCKER_IMAGE}:${DEFAULT_DOCKER_IMAGE_TAG_TESTING}
@@ -210,8 +219,8 @@ function check_for_updates() {
         echo "pulling docker image ${DEFAULT_DOCKER_IMAGE}:${RELEASE_CUT}"
         docker pull ${DEFAULT_DOCKER_IMAGE}:${RELEASE_CUT}
       fi
-      echo "no upgrade available for maps-tools"
     fi
+
   else
     echo "no version of maps-tools found for installation"
     exit 1
@@ -222,14 +231,6 @@ function check_for_updates() {
 function cleanup_tmp() {
   if [ -f /tmp/maps-tools ]; then
     rm -f /tmp/maps-tools
-  fi
-}
-
-function docker_pull() {
-  if [[ -z $RELEASE ]]; then
-    docker pull ${DEFAULT_DOCKER_IMAGE}:$RELEASE
-  else
-    docker pull ${DEFAULT_DOCKER_IMAGE}:${DEFAULT_DOCKER_IMAGE_TAG}
   fi
 }
 
