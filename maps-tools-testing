@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 #needs to increment on every change!!!
-#version: 43
+#version: 44
 #initialize variables
 readonly DEFAULT_DOCKER_IMAGE_REGISTRY="ghcr.io/spring-media"
 readonly DEFAULT_DOCKER_IMAGE_NAME=maps-tools
@@ -21,6 +21,7 @@ K8S_DASHBOARD=false
 RELEASE=
 USER_NAME=${HOME##*/}
 DOCKER_STARTED=false
+NEW_VERSION=
 
 declare -a ADDITIONAL_CONTAINER_ARGS
 volumes[0]="-v $HOME/.aws:/home/$DEFAULT_DOCKER_USERNAME/.aws"
@@ -172,7 +173,7 @@ function get_script() {
   if [ -f ./maps-tools ]; then
     cp -f ./maps-tools /tmp/maps-tools
   else
-    curl -s https://raw.githubusercontent.com/spring-media/maps-tools-install/main/maps-tools${RELEASE} >/tmp/maps-tools
+    curl -s https://raw.githubusercontent.com/spring-media/maps-tools-install/main/maps-tools-${RELEASE} >/tmp/maps-tools
   fi
   retVal=$?
   if [ $retVal -ne 0 ]; then
@@ -193,28 +194,28 @@ function install_script() {
 }
 
 function check_for_updates() {
-  get_script
-  if [ -f /tmp/maps-tools ]; then
+  NEW_VERSION=$(curl -s https://raw.githubusercontent.com/spring-media/maps-tools-install/main/maps-tools-${RELEASE} | grep '#version' | head -n 1 | awk '{print $2}')
+
+  if [ -f /usr/local/bin/maps-tools ]; then
     local version=$(grep -m 1 "#version:" /usr/local/bin/maps-tools | awk '{print $2}')
-    local new_version=$(grep -m 1 "#version:" /tmp/maps-tools | awk '{print $2}')
-    if [[ "${version}" < "${new_version}" ]]; then
-      read -p "There is a new version of maps-tools available. Do you want to update maps-tools and docker image? (y/n)" yn
-      if [ "$yn" == "y" ]; then
-        echo "upgrading maps-tools to version ${new_version}"
-        install_script
-        docker_pull
-      fi
-    else
-      if [[ $RELEASE = "testing" ]]; then
-        docker pull ${DEFAULT_DOCKER_IMAGE}:${DEFAULT_DOCKER_IMAGE_TAG_TESTING}
-      elif [[ -n $RELEASE ]]; then
-        RELEASE_CUT=$(echo "$RELEASE" | sed 's/^-//')
-        docker pull ${DEFAULT_DOCKER_IMAGE}:${RELEASE_CUT}
-      fi
-      echo "no upgrade available for maps-tools"
+    if [[ "${version}" < "${NEW_VERSION}" ]]; then
+    read -p "There is a new version of maps-tools available. Do you want to update maps-tools and docker image? (y/n)" yn
+    if [ "$yn" == "y" ]; then
+      get_script
+      echo "Installing maps-tools version ${NEW_VERSION}"
+      install_script
+      echo "pulling docker image for maps-tools $RELEASE"
+      docker_pull
     fi
   else
+    get_script
+    echo "Installing maps-tools version ${NEW_VERSION}"
+    install_script
+    echo "pulling docker image for maps-tools $RELEASE"
+    docker_pull
+    else
     echo "no version of maps-tools found for installation"
+    fi
     exit 1
   fi
   cleanup_tmp
@@ -306,9 +307,9 @@ while getopts "b:o:he:ivdaucsx" argument; do
   u)
     getopts_get_optional_argument $@
     if [[ "${OPTARG}" == "testing" ]]; then
-      RELEASE="-testing"
+      RELEASE="testing"
     else
-      RELEASE="-${OPTARG}"
+      RELEASE="${OPTARG}"
     fi
     UPDATE=true
     ;;
@@ -330,8 +331,6 @@ shift $((OPTIND - 1))
 if [ ! -x /usr/local/bin/maps-tools ]; then
   echo "installing maps-tools to /usr/local/bin"
   echo ""
-
-  get_script
   install_script
   cleanup_tmp
 
