@@ -64,7 +64,7 @@ function print_usage() {
   echo '-d: create daemon container that runs in the background, so you can use docker exec to connect to'
   echo '-a: attach to daemon container that previously created with -d option'
   echo '-c: cleanup/delete your actual .aws/config, .aws/credentials and .kube/config-* files, backup of old files will be created .aws/config-$DATE, e.g. .aws/config-20220504123050'
-  echo '-o: add aditional cmd parameter to docker run/create command, IMPORTANT: use double quotes! you can use this option more than one time, e.g. -o "-p 2222:22" -o "-e DISPLAY=host.docker.internal:0"'
+  echo '-o: add additional cmd parameter to docker run/create command, IMPORTANT: use double quotes! you can use this option more than one time, e.g. -o "-p 2222:22" -o "-e DISPLAY=host.docker.internal:0"'
   echo '-u: update maps-tools and docker image (force pull), to get testing versions use "-u testing"'
   echo '-x: start with kubernetes dashboard http://0.0.0.0:7777/'
   echo '-s: start a container with individual kube context'
@@ -149,6 +149,8 @@ function run_docker_image() {
     PS3="Choose the image to run: "
     select docker_image_name in "${docker_images[@]}"; do
       if (($REPLY >= 1 && $REPLY < (("${#docker_images[@]}" + 1)))); then
+        RELEASE="-${docker_images[(($REPLY - 1))]##*:}"
+        check_for_updates
         local image="${docker_images[(($REPLY - 1))]}"
         local docker_run_command="$(create_docker_run_command "$image")"
         eval $docker_run_command
@@ -200,27 +202,17 @@ function check_for_updates() {
       if [ "$yn" == "y" ]; then
         echo "upgrading maps-tools to version ${new_version}"
         install_script
-        if [[ $RELEASE = "testing" ]]; then
-          docker pull ${DEFAULT_DOCKER_IMAGE}:${DEFAULT_DOCKER_IMAGE_TAG_TESTING}
-        elif [[ -n $RELEASE ]]; then
-          RELEASE_CUT=$(echo "$RELEASE" | sed 's/^-//')
-          echo "pulling docker image ${DEFAULT_DOCKER_IMAGE}:${RELEASE_CUT}"
-          docker pull ${DEFAULT_DOCKER_IMAGE}:${RELEASE_CUT}
-        fi
-      else
-        echo "Continuing with current version of maps-tools"
+        docker_pull
       fi
-      echo "no upgrade available for maps-tools"
     else
       if [[ $RELEASE = "testing" ]]; then
         docker pull ${DEFAULT_DOCKER_IMAGE}:${DEFAULT_DOCKER_IMAGE_TAG_TESTING}
       elif [[ -n $RELEASE ]]; then
         RELEASE_CUT=$(echo "$RELEASE" | sed 's/^-//')
-        echo "pulling docker image ${DEFAULT_DOCKER_IMAGE}:${RELEASE_CUT}"
         docker pull ${DEFAULT_DOCKER_IMAGE}:${RELEASE_CUT}
       fi
+      echo "no upgrade available for maps-tools"
     fi
-
   else
     echo "no version of maps-tools found for installation"
     exit 1
@@ -231,6 +223,14 @@ function check_for_updates() {
 function cleanup_tmp() {
   if [ -f /tmp/maps-tools ]; then
     rm -f /tmp/maps-tools
+  fi
+}
+
+function docker_pull() {
+  if [[ -z $RELEASE ]]; then
+    docker pull ${DEFAULT_DOCKER_IMAGE}:$RELEASE
+  elif [[ -n $RELEASE ]]; then
+    docker pull ${DEFAULT_DOCKER_IMAGE}:$RELEASE
   fi
 }
 
