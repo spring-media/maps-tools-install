@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 #needs to increment on every change!!!
-#version: 41
+#version: 42
 #initialize variables
 readonly DEFAULT_DOCKER_IMAGE_REGISTRY="ghcr.io/spring-media"
 readonly DEFAULT_DOCKER_IMAGE_NAME=maps-tools
@@ -68,6 +68,7 @@ function print_usage() {
   echo '-u: update maps-tools and docker image (force pull), to get testing versions use "-u testing"'
   echo '-x: start with kubernetes dashboard http://0.0.0.0:7777/'
   echo '-s: start a container with individual kube context'
+  echo '--version: Print maps-tools script version and exit'
 
   echo
 
@@ -271,6 +272,13 @@ function cleanup_configs() {
       }
   done
 }
+
+# Handle --version flag before proceeding
+if [[ "$1" == "--version" ]]; then
+  version=$(grep -m 1 "#version:" "$0" | awk '{print $2}')
+  echo "maps-tools version: $version"
+  exit 0
+fi
 
 # Parse flags
 while getopts "b:o:he:ivdaucsx" argument; do
