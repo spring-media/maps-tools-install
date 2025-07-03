@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 #needs to increment on every change!!!
-#version: 40
+#version: 41
 #initialize variables
 readonly DEFAULT_DOCKER_IMAGE_REGISTRY="ghcr.io/spring-media"
 readonly DEFAULT_DOCKER_IMAGE_NAME=maps-tools
@@ -195,8 +195,7 @@ function check_for_updates() {
   if [ -f /tmp/maps-tools ]; then
     local version=$(grep -m 1 "#version:" /usr/local/bin/maps-tools | awk '{print $2}')
     local new_version=$(grep -m 1 "#version:" /tmp/maps-tools | awk '{print $2}')
-    if [ ${version} -lt ${new_version} ]; then
-      read -p "There is a new version of maps-tools available. Do you want to update maps-tools and docker image? (y/n)" yn
+    if [[ -n "$version" && -n "$new_version" && "$version" -lt "$new_version" ]]; then      read -p "There is a new version of maps-tools available. Do you want to update maps-tools and docker image? (y/n)" yn
       if [ "$yn" == "y" ]; then
         echo "upgrading maps-tools to version ${new_version}"
         install_script
@@ -226,9 +225,10 @@ function cleanup_tmp() {
 
 function docker_pull() {
   if [[ -z $RELEASE ]]; then
-    docker pull ${DEFAULT_DOCKER_IMAGE}:$RELEASE
-  elif [[ -n $RELEASE ]]; then
-    docker pull ${DEFAULT_DOCKER_IMAGE}:$RELEASE
+    docker pull ${DEFAULT_DOCKER_IMAGE}:${DEFAULT_DOCKER_IMAGE_TAG}
+  else
+    RELEASE_CUT=$(echo "$RELEASE" | sed 's/^-//')
+    docker pull ${DEFAULT_DOCKER_IMAGE}:${RELEASE_CUT}
   fi
 }
 
@@ -305,8 +305,10 @@ while getopts "b:o:he:ivdaucsx" argument; do
     getopts_get_optional_argument $@
     if [[ "${OPTARG}" == "testing" ]]; then
       RELEASE="-testing"
-    else
+    elif [[ -n "${OPTARG}" ]]; then
       RELEASE="-${OPTARG}"
+    else
+      RELEASE=""
     fi
     UPDATE=true
     ;;
