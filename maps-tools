@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 #needs to increment on every change!!!
-#version: 42
+#version: 45
 #initialize variables
 readonly DEFAULT_DOCKER_IMAGE_REGISTRY="ghcr.io/spring-media"
 readonly DEFAULT_DOCKER_IMAGE_NAME=maps-tools
@@ -21,6 +21,7 @@ K8S_DASHBOARD=false
 RELEASE=
 USER_NAME=${HOME##*/}
 DOCKER_STARTED=false
+NEW_VERSION=
 
 declare -a ADDITIONAL_CONTAINER_ARGS
 volumes[0]="-v $HOME/.aws:/home/$DEFAULT_DOCKER_USERNAME/.aws"
@@ -64,7 +65,7 @@ function print_usage() {
   echo '-d: create daemon container that runs in the background, so you can use docker exec to connect to'
   echo '-a: attach to daemon container that previously created with -d option'
   echo '-c: cleanup/delete your actual .aws/config, .aws/credentials and .kube/config-* files, backup of old files will be created .aws/config-$DATE, e.g. .aws/config-20220504123050'
-  echo '-o: add aditional cmd parameter to docker run/create command, IMPORTANT: use double quotes! you can use this option more than one time, e.g. -o "-p 2222:22" -o "-e DISPLAY=host.docker.internal:0"'
+  echo '-o: add additional cmd parameter to docker run/create command, IMPORTANT: use double quotes! you can use this option more than one time, e.g. -o "-p 2222:22" -o "-e DISPLAY=host.docker.internal:0"'
   echo '-u: update maps-tools and docker image (force pull), to get testing versions use "-u testing"'
   echo '-x: start with kubernetes dashboard http://0.0.0.0:7777/'
   echo '-s: start a container with individual kube context'
@@ -150,6 +151,8 @@ function run_docker_image() {
     PS3="Choose the image to run: "
     select docker_image_name in "${docker_images[@]}"; do
       if (($REPLY >= 1 && $REPLY < (("${#docker_images[@]}" + 1)))); then
+        RELEASE="-${docker_images[(($REPLY - 1))]##*:}"
+        check_for_updates
         local image="${docker_images[(($REPLY - 1))]}"
         local docker_run_command="$(create_docker_run_command "$image")"
         eval $docker_run_command
@@ -171,7 +174,7 @@ function get_script() {
   if [ -f ./maps-tools ]; then
     cp -f ./maps-tools /tmp/maps-tools
   else
-    curl -s https://raw.githubusercontent.com/spring-media/maps-tools-install/main/maps-tools${RELEASE} >/tmp/maps-tools
+    curl -s https://raw.githubusercontent.com/spring-media/maps-tools-install/main/maps-tools-${RELEASE} >/tmp/maps-tools
   fi
   retVal=$?
   if [ $retVal -ne 0 ]; then
@@ -182,7 +185,7 @@ function get_script() {
 
 function install_script() {
   if [ -f /tmp/maps-tools ]; then
-    echo "If ask, enter your AD password to install maps-tools into /usr/local/bin/maps-tools"
+    echo "If asked, enter your AD password to install maps-tools into /usr/local/bin/maps-tools"
     cp -f /tmp/maps-tools /usr/local/bin/maps-tools 1>&- 2>&- || sudo cp -f /tmp/maps-tools /usr/local/bin/maps-tools
     chmod 755 /usr/local/bin/maps-tools 1>&- 2>&- || sudo chmod 755 /usr/local/bin/maps-tools
   else
@@ -196,7 +199,8 @@ function check_for_updates() {
   if [ -f /tmp/maps-tools ]; then
     local version=$(grep -m 1 "#version:" /usr/local/bin/maps-tools | awk '{print $2}')
     local new_version=$(grep -m 1 "#version:" /tmp/maps-tools | awk '{print $2}')
-    if [[ -n "$version" && -n "$new_version" && "$version" -lt "$new_version" ]]; then      read -p "There is a new version of maps-tools available. Do you want to update maps-tools and docker image? (y/n)" yn
+    if [[ -n "$version" && -n "$new_version" && "$version" -lt "$new_version" ]]; then
+      read -p "There is a new version of maps-tools available. Do you want to update maps-tools and docker image? (y/n)" yn
       if [ "$yn" == "y" ]; then
         echo "upgrading maps-tools to version ${new_version}"
         install_script
@@ -338,8 +342,6 @@ shift $((OPTIND - 1))
 if [ ! -x /usr/local/bin/maps-tools ]; then
   echo "installing maps-tools to /usr/local/bin"
   echo ""
-
-  get_script
   install_script
   cleanup_tmp
 
