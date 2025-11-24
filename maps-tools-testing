@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 #needs to increment on every change!!!
-#version: 45
+#version: 46
 #initialize variables
 readonly DEFAULT_DOCKER_IMAGE_REGISTRY="ghcr.io/spring-media"
 readonly DEFAULT_DOCKER_IMAGE_NAME=maps-tools
@@ -14,6 +14,7 @@ DEFAULT_STAGE=$AWS_PROFILE
 USE_AWS_VOLUME=true
 CREATE_DAEMON_CONTAINER=false
 CONTAINER_ATTACH=false
+CONTAINER_EXEC=false
 UPDATE=false
 CLEANUP_CONFIGS=false
 SESSION_KUBECONFIG=false
@@ -57,13 +58,14 @@ done
 
 function print_usage() {
   echo
-  echo "Usage: $0 [-e] [-v] [-h] [-i] [-d] [-a] [-c] [-o] [-u] [-x] [-s] [-r]"
+  echo "Usage: $0 [-e] [-v] [-h] [-i] [-d] [-a] [-E] [-c] [-o] [-u] [-x] [-s] [-r]"
   echo '-e: Environment example (AWS_PROFILE NAME: mediasites-stage.dev|mediasites-prod.admin)'
   echo '-v: DO NOT USE a Docker volume mount for local .aws, .ssh, .helm and .kube configs inside the container.'
   echo '-h: Print this help text'
   echo '-i: Ask for a local Docker image to use'
   echo '-d: create daemon container that runs in the background, so you can use docker exec to connect to'
   echo '-a: attach to daemon container that previously created with -d option'
+  echo '-E: execute a command in the daemon container that previously created with -d option'
   echo '-c: cleanup/delete your actual .aws/config, .aws/credentials and .kube/config-* files, backup of old files will be created .aws/config-$DATE, e.g. .aws/config-20220504123050'
   echo '-o: add additional cmd parameter to docker run/create command, IMPORTANT: use double quotes! you can use this option more than one time, e.g. -o "-p 2222:22" -o "-e DISPLAY=host.docker.internal:0"'
   echo '-u: update maps-tools and docker image (force pull), to get testing versions use "-u testing"'
@@ -77,9 +79,11 @@ function print_usage() {
 }
 
 function create_docker_run_command() {
-  [ $# -ne 1 ] && echo ❌ No image name given to function \"create_docker_run_command\" && return
+  [ $# -lt 1 ] && echo ❌ No image name given to function \"create_docker_run_command\" && return
   local docker_string=""
   local image_name="$1"
+  shift
+  local exec_args="$*"
   local start_path=""
 
   if [ "${#ports[@]}" == "0" ]; then
@@ -122,6 +126,18 @@ function create_docker_run_command() {
       docker_string="docker start maps-tools; docker exec -ti -e \"START_PATH=$start_path\" -e \"AWS_PROFILE=$DEFAULT_STAGE\" -e \"DEFAULT_SESSION_KUBECONFIG=$SESSION_KUBECONFIG\" ${ADDITIONAL_CONTAINER_ARGS[@]} maps-tools /init/init.sh"
     fi
     ;;
+  "$CONTAINER_EXEC")
+    if [[ $(docker ps --format "{{.Names}}" --filter "name=maps-tools") == "maps-tools" ]]; then
+      docker_string="docker exec -t -e \"START_PATH=$start_path\" -e \"AWS_PROFILE=$DEFAULT_STAGE\" -e \"DEFAULT_SESSION_KUBECONFIG=$SESSION_KUBECONFIG\" ${ADDITIONAL_CONTAINER_ARGS[@]} maps-tools /usr/bin/bash --login -c \"$exec_args\""
+      echo "DEBUG: Executing: $docker_string" >&2
+    elif [[ $(docker ps -a --format "{{.Names}}" --filter "name=maps-tools") == "maps-tools" ]]; then
+      docker_string="docker start maps-tools; docker exec -t -e \"START_PATH=$start_path\" -e \"AWS_PROFILE=$DEFAULT_STAGE\" -e \"DEFAULT_SESSION_KUBECONFIG=$SESSION_KUBECONFIG\" ${ADDITIONAL_CONTAINER_ARGS[@]} maps-tools /usr/bin/bash --login -c \"$exec_args\""
+      echo "DEBUG: Executing: $docker_string" >&2
+    else
+      echo "No running container named maps-tools found to exec into."
+      exit 1
+    fi
+    ;;
   *)
 
     if [[ "${USE_AWS_VOLUME}" == true ]]; then
@@ -140,6 +156,12 @@ function run_docker_image() {
   if [[ "${CREATE_DAEMON_CONTAINER}" == true && "${CONTAINER_ATTACH}" == true ]]; then
     echo "you cannot use -d and -a Option simultaneously"
     exit 1
+  elif [[ "${CREATE_DAEMON_CONTAINER}" == true && "${CONTAINER_EXEC}" == true ]]; then
+    echo "you cannot use -d and -E Option simultaneously"
+    exit 1
+  elif [[ "${CONTAINER_ATTACH}" == true && "${CONTAINER_EXEC}" == true ]]; then
+    echo "you cannot use -a and -E Option simultaneously"
+    exit 1
   fi
   case true in
   "$USE_DOCKER_IMAGE")
@@ -154,7 +176,7 @@ function run_docker_image() {
         RELEASE="-${docker_images[(($REPLY - 1))]##*:}"
         check_for_updates
         local image="${docker_images[(($REPLY - 1))]}"
-        local docker_run_command="$(create_docker_run_command "$image")"
+        local docker_run_command="$(create_docker_run_command "$image" "$@")"
         eval $docker_run_command
       else
         echo ❌ Invalid choice && exit 1
@@ -164,7 +186,7 @@ function run_docker_image() {
     ;;
   *)
     check_for_updates
-    local docker_run_command="$(create_docker_run_command "$image")"
+    local docker_run_command="$(create_docker_run_command "$image" "$@")"
     eval $docker_run_command
     ;;
   esac
@@ -285,7 +307,7 @@ if [[ "$1" == "--version" ]]; then
 fi
 
 # Parse flags
-while getopts "b:o:he:ivdaucsx" argument; do
+while getopts "b:o:he:ivdaucsxE" argument; do
   case "${argument}" in
   b)
     # Will be eventually used for additional BUILD ARGs later. Currently, the only BUILD ARG is directly
@@ -306,6 +328,9 @@ while getopts "b:o:he:ivdaucsx" argument; do
     ;;
   a)
     CONTAINER_ATTACH=true
+    ;;
+  E)
+    CONTAINER_EXEC=true
     ;;
   c)
     CLEANUP_CONFIGS=true
@@ -422,5 +447,5 @@ fi
 
 # Call function to obtain the proper call to docker run
 if [ $DOCKER_STARTED ]; then
-  run_docker_image
+  run_docker_image "$@"
 fi
