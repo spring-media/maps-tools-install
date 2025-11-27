@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 #needs to increment on every change!!!
-#version: 50
+#version: 52
 #initialize variables
 readonly DEFAULT_DOCKER_IMAGE_REGISTRY="ghcr.io/spring-media"
 readonly DEFAULT_DOCKER_IMAGE_NAME=maps-tools
@@ -242,12 +242,6 @@ function check_for_updates() {
         docker_pull
       fi
     else
-      if [[ $RELEASE = "testing" ]]; then
-        docker pull ${DEFAULT_DOCKER_IMAGE}:${DEFAULT_DOCKER_IMAGE_TAG_TESTING}
-      elif [[ -n $RELEASE ]]; then
-        RELEASE_CUT=$(echo "$RELEASE" | sed 's/^-//')
-        docker pull ${DEFAULT_DOCKER_IMAGE}:${RELEASE_CUT}
-      fi
       echo "no upgrade available for maps-tools"
     fi
   else
