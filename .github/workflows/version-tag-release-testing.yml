@@ -1,0 +1,62 @@
+name: Version Tag and Release (Testing)
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'maps-tools-testing'
+  workflow_dispatch:
+
+jobs:
+  check-version-and-release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Extract current version
+        id: current_version
+        run: |
+          VERSION=$(grep -m 1 "#version:" maps-tools-testing | awk '{print $2}')
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Current version: $VERSION"
+
+      - name: Check if tag exists
+        id: check_tag
+        run: |
+          VERSION=${{ steps.current_version.outputs.version }}
+          if git rev-parse "v${VERSION}-testing" >/dev/null 2>&1; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+            echo "Tag v${VERSION}-testing already exists"
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+            echo "Tag v${VERSION}-testing does not exist"
+          fi
+
+      - name: Create tag
+        if: steps.check_tag.outputs.exists == 'false'
+        run: |
+          VERSION=${{ steps.current_version.outputs.version }}
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "v${VERSION}-testing" -m "Release testing version $VERSION"
+          git push origin "v${VERSION}-testing"
+
+      - name: Create GitHub Release
+        if: steps.check_tag.outputs.exists == 'false'
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: v${{ steps.current_version.outputs.version }}-testing
+          name: maps-tools v${{ steps.current_version.outputs.version }}-testing
+          draft: false
+          prerelease: true
+          files: |
+            maps-tools-testing
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
