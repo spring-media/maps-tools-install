@@ -86,13 +86,6 @@ function create_docker_run_command() {
   local exec_args="$*"
   local start_path=""
 
-  # Detect host architecture and set platform to avoid QEMU user-mode bug on ARM64 Macs
-  # See: https://github.com/golang/go/issues/69255
-  local platform_flag=""
-  if [[ "$(uname -m)" == "arm64" ]] && [[ "$(uname -s)" == "Darwin" ]]; then
-    platform_flag="--platform linux/amd64"
-  fi
-
   if [ "${#ports[@]}" == "0" ]; then
     ports_string=""
   else
@@ -121,9 +114,9 @@ function create_docker_run_command() {
       docker rm -f maps-tools 2>&1 >/dev/null
     fi
     if [[ "${USE_AWS_VOLUME}" == true ]]; then
-      docker_string="docker create ${platform_flag} --name maps-tools ${volumes[*]} ${ports_string} ${dashboard_string} -e \"PORT_VARIABLE=$port_variable\" -e \"AWS_PROFILE=$DEFAULT_STAGE\" -e \"DEFAULT_SESSION_KUBECONFIG=$SESSION_KUBECONFIG\" -e \"START_PATH=$start_path\" ${ADDITIONAL_CONTAINER_ARGS[@]} --entrypoint \"/init/init_daemon.sh\" $image_name"
+      docker_string="docker create --name maps-tools ${volumes[*]} ${ports_string} ${dashboard_string} -e \"PORT_VARIABLE=$port_variable\" -e \"AWS_PROFILE=$DEFAULT_STAGE\" -e \"DEFAULT_SESSION_KUBECONFIG=$SESSION_KUBECONFIG\" -e \"START_PATH=$start_path\" ${ADDITIONAL_CONTAINER_ARGS[@]} --entrypoint \"/init/init_daemon.sh\" $image_name"
     else
-      docker_string="docker create ${platform_flag} --name maps-tools ${volumes[1]} ${ports_string} ${dashboard_string} -e \"PORT_VARIABLE=$port_variable\" -e \"AWS_PROFILE=$DEFAULT_STAGE\" -e \"DEFAULT_SESSION_KUBECONFIG=$SESSION_KUBECONFIG\" -e \"START_PATH=$start_path\" ${ADDITIONAL_CONTAINER_ARGS[@]} --entrypoint \"/init/init_daemon.sh\" $image_name"
+      docker_string="docker create --name maps-tools ${volumes[1]} ${ports_string} ${dashboard_string} -e \"PORT_VARIABLE=$port_variable\" -e \"AWS_PROFILE=$DEFAULT_STAGE\" -e \"DEFAULT_SESSION_KUBECONFIG=$SESSION_KUBECONFIG\" -e \"START_PATH=$start_path\" ${ADDITIONAL_CONTAINER_ARGS[@]} --entrypoint \"/init/init_daemon.sh\" $image_name"
     fi
     ;;
   "$CONTAINER_ATTACH")
@@ -148,9 +141,9 @@ function create_docker_run_command() {
   *)
 
     if [[ "${USE_AWS_VOLUME}" == true ]]; then
-      docker_string="docker run ${platform_flag} -it --rm ${volumes[*]} ${ports_string} ${dashboard_string} -e \"PORT_VARIABLE=$port_variable\" -e \"START_PATH=$start_path\" -e \"AWS_PROFILE=$DEFAULT_STAGE\" -e \"DEFAULT_SESSION_KUBECONFIG=$SESSION_KUBECONFIG\" ${ADDITIONAL_CONTAINER_ARGS[@]} $image_name"
+      docker_string="docker run -it --rm ${volumes[*]} ${ports_string} ${dashboard_string} -e \"PORT_VARIABLE=$port_variable\" -e \"START_PATH=$start_path\" -e \"AWS_PROFILE=$DEFAULT_STAGE\" -e \"DEFAULT_SESSION_KUBECONFIG=$SESSION_KUBECONFIG\" ${ADDITIONAL_CONTAINER_ARGS[@]} $image_name"
     else
-      docker_string="docker run ${platform_flag} -it --rm ${volumes[1]} ${ports_string}  ${dashboard_string} -e \"PORT_VARIABLE=$port_variable\" -e \"START_PATH=$start_path\" -e \"AWS_PROFILE=$DEFAULT_STAGE\" -e \"DEFAULT_SESSION_KUBECONFIG=$SESSION_KUBECONFIG\" ${ADDITIONAL_CONTAINER_ARGS[@]} $image_name"
+      docker_string="docker run -it --rm ${volumes[1]} ${ports_string}  ${dashboard_string} -e \"PORT_VARIABLE=$port_variable\" -e \"START_PATH=$start_path\" -e \"AWS_PROFILE=$DEFAULT_STAGE\" -e \"DEFAULT_SESSION_KUBECONFIG=$SESSION_KUBECONFIG\" ${ADDITIONAL_CONTAINER_ARGS[@]} $image_name"
     fi
     ;;
   esac
@@ -249,17 +242,11 @@ function check_for_updates() {
         docker_pull
       fi
     else
-      # Detect host architecture and set platform to match docker run behavior
-      local platform_flag=""
-      if [[ "$(uname -m)" == "arm64" ]] && [[ "$(uname -s)" == "Darwin" ]]; then
-        platform_flag="--platform linux/amd64"
-      fi
-
       if [[ $RELEASE = "-testing" ]]; then
-        docker pull ${platform_flag} ${DEFAULT_DOCKER_IMAGE}:${DEFAULT_DOCKER_IMAGE_TAG_TESTING}
+        docker pull ${DEFAULT_DOCKER_IMAGE}:${DEFAULT_DOCKER_IMAGE_TAG_TESTING}
       elif [[ -n $RELEASE ]]; then
         RELEASE_CUT=$(echo "$RELEASE" | sed 's/^-//')
-        docker pull ${platform_flag} ${DEFAULT_DOCKER_IMAGE}:${RELEASE_CUT}
+        docker pull ${DEFAULT_DOCKER_IMAGE}:${RELEASE_CUT}
       fi
       echo "no upgrade available for maps-tools"
     fi
@@ -277,17 +264,11 @@ function cleanup_tmp() {
 }
 
 function docker_pull() {
-  # Detect host architecture and set platform to match docker run behavior
-  local platform_flag=""
-  if [[ "$(uname -m)" == "arm64" ]] && [[ "$(uname -s)" == "Darwin" ]]; then
-    platform_flag="--platform linux/amd64"
-  fi
-
   if [[ -z $RELEASE ]]; then
-    docker pull ${platform_flag} ${DEFAULT_DOCKER_IMAGE}:${DEFAULT_DOCKER_IMAGE_TAG}
+    docker pull ${DEFAULT_DOCKER_IMAGE}:${DEFAULT_DOCKER_IMAGE_TAG}
   else
     RELEASE_CUT=$(echo "$RELEASE" | sed 's/^-//')
-    docker pull ${platform_flag} ${DEFAULT_DOCKER_IMAGE}:${RELEASE_CUT}
+    docker pull ${DEFAULT_DOCKER_IMAGE}:${RELEASE_CUT}
   fi
 }
 
