@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 #needs to increment on every change!!!
-#version: 47
+#version: 50
 #initialize variables
 readonly DEFAULT_DOCKER_IMAGE_REGISTRY="ghcr.io/spring-media"
 readonly DEFAULT_DOCKER_IMAGE_NAME=maps-tools
@@ -193,7 +193,16 @@ function run_docker_image() {
 }
 
 function get_script() {
-  if [ -f ./maps-tools ]; then
+  # Always download from repository for initial installation
+  # Only use local copy during development/updates when explicitly running from repo
+  local use_local=false
+  
+  # Check if we're in a development context (running from repo directory)
+  if [ -f ./maps-tools ] && [ -d ./.git ] && [ -x /usr/local/bin/maps-tools ]; then
+    use_local=true
+  fi
+  
+  if [ "$use_local" = true ]; then
     cp -f ./maps-tools /tmp/maps-tools
   else
     if [[ -z "$RELEASE" ]]; then
@@ -371,6 +380,7 @@ shift $((OPTIND - 1))
 if [ ! -x /usr/local/bin/maps-tools ]; then
   echo "installing maps-tools to /usr/local/bin"
   echo ""
+  get_script
   install_script
   cleanup_tmp
 
