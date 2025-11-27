@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 #needs to increment on every change!!!
-#version: 46
+#version: 47
 #initialize variables
 readonly DEFAULT_DOCKER_IMAGE_REGISTRY="ghcr.io/spring-media"
 readonly DEFAULT_DOCKER_IMAGE_NAME=maps-tools
@@ -196,7 +196,11 @@ function get_script() {
   if [ -f ./maps-tools ]; then
     cp -f ./maps-tools /tmp/maps-tools
   else
-    curl -s https://raw.githubusercontent.com/spring-media/maps-tools-install/main/maps-tools-${RELEASE} >/tmp/maps-tools
+    if [[ -z "$RELEASE" ]]; then
+      curl -s https://raw.githubusercontent.com/spring-media/maps-tools-install/main/maps-tools >/tmp/maps-tools
+    else
+      curl -s https://raw.githubusercontent.com/spring-media/maps-tools-install/main/maps-tools${RELEASE} >/tmp/maps-tools
+    fi
   fi
   retVal=$?
   if [ $retVal -ne 0 ]; then
