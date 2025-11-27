@@ -249,11 +249,17 @@ function check_for_updates() {
         docker_pull
       fi
     else
+      # Detect host architecture and set platform to match docker run behavior
+      local platform_flag=""
+      if [[ "$(uname -m)" == "arm64" ]] && [[ "$(uname -s)" == "Darwin" ]]; then
+        platform_flag="--platform linux/amd64"
+      fi
+
       if [[ $RELEASE = "testing" ]]; then
-        docker pull ${DEFAULT_DOCKER_IMAGE}:${DEFAULT_DOCKER_IMAGE_TAG_TESTING}
+        docker pull ${platform_flag} ${DEFAULT_DOCKER_IMAGE}:${DEFAULT_DOCKER_IMAGE_TAG_TESTING}
       elif [[ -n $RELEASE ]]; then
         RELEASE_CUT=$(echo "$RELEASE" | sed 's/^-//')
-        docker pull ${DEFAULT_DOCKER_IMAGE}:${RELEASE_CUT}
+        docker pull ${platform_flag} ${DEFAULT_DOCKER_IMAGE}:${RELEASE_CUT}
       fi
       echo "no upgrade available for maps-tools"
     fi
@@ -271,11 +277,17 @@ function cleanup_tmp() {
 }
 
 function docker_pull() {
+  # Detect host architecture and set platform to match docker run behavior
+  local platform_flag=""
+  if [[ "$(uname -m)" == "arm64" ]] && [[ "$(uname -s)" == "Darwin" ]]; then
+    platform_flag="--platform linux/amd64"
+  fi
+
   if [[ -z $RELEASE ]]; then
-    docker pull ${DEFAULT_DOCKER_IMAGE}:${DEFAULT_DOCKER_IMAGE_TAG}
+    docker pull ${platform_flag} ${DEFAULT_DOCKER_IMAGE}:${DEFAULT_DOCKER_IMAGE_TAG}
   else
     RELEASE_CUT=$(echo "$RELEASE" | sed 's/^-//')
-    docker pull ${DEFAULT_DOCKER_IMAGE}:${RELEASE_CUT}
+    docker pull ${platform_flag} ${DEFAULT_DOCKER_IMAGE}:${RELEASE_CUT}
   fi
 }
 
