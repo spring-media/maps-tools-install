@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 #needs to increment on every change!!!
-#version: 48
+#version: 49
 #initialize variables
 readonly DEFAULT_DOCKER_IMAGE_REGISTRY="ghcr.io/spring-media"
 readonly DEFAULT_DOCKER_IMAGE_NAME=maps-tools
@@ -380,6 +380,7 @@ shift $((OPTIND - 1))
 if [ ! -x /usr/local/bin/maps-tools ]; then
   echo "installing maps-tools to /usr/local/bin"
   echo ""
+  get_script
   install_script
   cleanup_tmp
 
