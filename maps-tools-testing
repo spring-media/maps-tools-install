@@ -242,12 +242,6 @@ function check_for_updates() {
         docker_pull
       fi
     else
-      if [[ $RELEASE = "-testing" ]]; then
-        docker pull ${DEFAULT_DOCKER_IMAGE}:${DEFAULT_DOCKER_IMAGE_TAG_TESTING}
-      elif [[ -n $RELEASE ]]; then
-        RELEASE_CUT=$(echo "$RELEASE" | sed 's/^-//')
-        docker pull ${DEFAULT_DOCKER_IMAGE}:${RELEASE_CUT}
-      fi
       echo "no upgrade available for maps-tools"
     fi
   else
