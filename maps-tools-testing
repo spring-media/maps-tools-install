@@ -255,7 +255,7 @@ function check_for_updates() {
         platform_flag="--platform linux/amd64"
       fi
 
-      if [[ $RELEASE = "testing" ]]; then
+      if [[ $RELEASE = "-testing" ]]; then
         docker pull ${platform_flag} ${DEFAULT_DOCKER_IMAGE}:${DEFAULT_DOCKER_IMAGE_TAG_TESTING}
       elif [[ -n $RELEASE ]]; then
         RELEASE_CUT=$(echo "$RELEASE" | sed 's/^-//')
