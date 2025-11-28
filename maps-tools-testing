@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 #needs to increment on every change!!!
-#version: 52
+#version: 53
 #initialize variables
 readonly DEFAULT_DOCKER_IMAGE_REGISTRY="ghcr.io/spring-media"
 readonly DEFAULT_DOCKER_IMAGE_NAME=maps-tools
@@ -25,22 +25,22 @@ DOCKER_STARTED=false
 NEW_VERSION=
 
 declare -a ADDITIONAL_CONTAINER_ARGS
-volumes[0]="-v $HOME/.aws:/home/$DEFAULT_DOCKER_USERNAME/.aws"
-volumes[1]="-v $HOME:/home/$USER_NAME"
-volumes[2]="-v $HOME/.ssh:/home/$DEFAULT_DOCKER_USERNAME/.ssh"
-volumes[3]="-v $HOME/.helm:/home/$DEFAULT_DOCKER_USERNAME/.helm"
-volumes[4]="-v $HOME/.kube:/home/$DEFAULT_DOCKER_USERNAME/.kube"
-volumes[5]="-v $HOME/.spacelift:/home/$DEFAULT_DOCKER_USERNAME/.spacelift"
-volumes[6]="-v $HOME/.terraformrc:/home/$DEFAULT_DOCKER_USERNAME/.terraformrc"
+volumes[0]="-v \"$HOME/.aws:/home/$DEFAULT_DOCKER_USERNAME/.aws\""
+volumes[1]="-v \"$HOME:/home/$USER_NAME\""
+volumes[2]="-v \"$HOME/.ssh:/home/$DEFAULT_DOCKER_USERNAME/.ssh\""
+volumes[3]="-v \"$HOME/.helm:/home/$DEFAULT_DOCKER_USERNAME/.helm\""
+volumes[4]="-v \"$HOME/.kube:/home/$DEFAULT_DOCKER_USERNAME/.kube\""
+volumes[5]="-v \"$HOME/.spacelift:/home/$DEFAULT_DOCKER_USERNAME/.spacelift\""
+volumes[6]="-v \"$HOME/.terraformrc:/home/$DEFAULT_DOCKER_USERNAME/.terraformrc\""
 
 declare -a ports
 
 # select 5 random ports that are not in use from range 8000-8999
 for i in {8000..8999}; do
-  if nc -z 127.0.0.1 ${i} -w2 2>/dev/null; then
+  if nc -z 127.0.0.1 "${i}" -w2 2>/dev/null; then
     if [ "${i}" == "8999" ]; then
       echo "all local ports 8000-8999 are in use"
-      exit
+      exit 1
     else
       continue
     fi
@@ -53,8 +53,8 @@ for i in {8000..8999}; do
   fi
 done
 
-[ ! -f ~/.terraformrc ] && touch ~/.terraformrc
-[ ! -d ~/.spacelift ] && mkdir ~/.spacelift
+[ ! -f "$HOME/.terraformrc" ] && touch "$HOME/.terraformrc"
+[ ! -d "$HOME/.spacelift" ] && mkdir -p "$HOME/.spacelift"
 
 function print_usage() {
   echo
@@ -173,8 +173,6 @@ function run_docker_image() {
     PS3="Choose the image to run: "
     select docker_image_name in "${docker_images[@]}"; do
       if (($REPLY >= 1 && $REPLY < (("${#docker_images[@]}" + 1)))); then
-        RELEASE="-${docker_images[(($REPLY - 1))]##*:}"
-        check_for_updates
         local image="${docker_images[(($REPLY - 1))]}"
         local docker_run_command="$(create_docker_run_command "$image" "$@")"
         eval $docker_run_command
@@ -203,18 +201,35 @@ function get_script() {
   fi
   
   if [ "$use_local" = true ]; then
-    cp -f ./maps-tools /tmp/maps-tools
+    if ! cp -f ./maps-tools /tmp/maps-tools; then
+      echo "Error: Failed to copy local maps-tools script"
+      exit 1
+    fi
   else
     if [[ -z "$RELEASE" ]]; then
-      curl -s https://raw.githubusercontent.com/spring-media/maps-tools-install/main/maps-tools >/tmp/maps-tools
+      if ! curl -sf https://raw.githubusercontent.com/spring-media/maps-tools-install/main/maps-tools >/tmp/maps-tools; then
+        echo "Error: Failed to download maps-tools script from repository"
+        exit 1
+      fi
     else
-      curl -s https://raw.githubusercontent.com/spring-media/maps-tools-install/main/maps-tools${RELEASE} >/tmp/maps-tools
+      if ! curl -sf "https://raw.githubusercontent.com/spring-media/maps-tools-install/main/maps-tools${RELEASE}" >/tmp/maps-tools; then
+        echo "Error: Failed to download maps-tools${RELEASE} script from repository"
+        exit 1
+      fi
     fi
   fi
-  retVal=$?
-  if [ $retVal -ne 0 ]; then
-    echo "Error getting version of maps-tools"
-    exit $retVal
+  
+  # Verify the downloaded/copied file is not empty and contains version info
+  if [ ! -s /tmp/maps-tools ]; then
+    echo "Error: Downloaded maps-tools script is empty"
+    rm -f /tmp/maps-tools
+    exit 1
+  fi
+  
+  if ! grep -q "#version:" /tmp/maps-tools; then
+    echo "Error: Downloaded maps-tools script appears to be corrupted (no version found)"
+    rm -f /tmp/maps-tools
+    exit 1
   fi
 }
 
@@ -436,20 +451,21 @@ else
   MAX_CNT=$((240 / STEP_CNT))
   while [ $START_CNT -lt $MAX_CNT ]; do
     sleep $STEP_CNT
-    START_CNT=$((START_CNT++))
+    ((START_CNT++))
     echo -n "."
     if [ $(lsof -U | grep docker.sock | wc -l) -gt 0 ]; then
       echo
       echo "Docker was started"
-      START_CNT=$((++MAX_CNT))
+      START_CNT=$MAX_CNT
       DOCKER_STARTED=true
       sleep 5
     fi
   done
 
   echo
-  if [ !$DOCKER_STARTED ]; then
+  if [ "$DOCKER_STARTED" != true ]; then
     echo "Docker couldn't be started"
+    exit 1
   fi
 fi
 
