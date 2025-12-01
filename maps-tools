@@ -1,287 +1,384 @@
 #!/usr/bin/env bash
 
 #needs to increment on every change!!!
-#version: 53
-#initialize variables
+#version: 54
+
+# ============================================================================
+# Constants
+# ============================================================================
 readonly DEFAULT_DOCKER_IMAGE_REGISTRY="ghcr.io/spring-media"
 readonly DEFAULT_DOCKER_IMAGE_NAME=maps-tools
 readonly DEFAULT_DOCKER_IMAGE_TAG=latest
-readonly DEFAULT_DOCKER_IMAGE_TAG_TESTING=testing
-readonly DEFAULT_DOCKER_IMAGE="${DEFAULT_DOCKER_IMAGE_REGISTRY}/${DEFAULT_DOCKER_IMAGE_NAME}"
 readonly DEFAULT_DOCKER_USERNAME=k8s
-USE_DOCKER_IMAGE=false
-DEFAULT_STAGE=$AWS_PROFILE
-USE_AWS_VOLUME=true
-CREATE_DAEMON_CONTAINER=false
-CONTAINER_ATTACH=false
-CONTAINER_EXEC=false
-UPDATE=false
-CLEANUP_CONFIGS=false
-SESSION_KUBECONFIG=false
-K8S_DASHBOARD=false
-RELEASE=
-USER_NAME=${HOME##*/}
-DOCKER_STARTED=false
-NEW_VERSION=
+readonly DEFAULT_DOCKER_IMAGE="${DEFAULT_DOCKER_IMAGE_REGISTRY}/${DEFAULT_DOCKER_IMAGE_NAME}"
 
-declare -a ADDITIONAL_CONTAINER_ARGS
-volumes[0]="-v \"$HOME/.aws:/home/$DEFAULT_DOCKER_USERNAME/.aws\""
-volumes[1]="-v \"$HOME:/home/$USER_NAME\""
-volumes[2]="-v \"$HOME/.ssh:/home/$DEFAULT_DOCKER_USERNAME/.ssh\""
-volumes[3]="-v \"$HOME/.helm:/home/$DEFAULT_DOCKER_USERNAME/.helm\""
-volumes[4]="-v \"$HOME/.kube:/home/$DEFAULT_DOCKER_USERNAME/.kube\""
-volumes[5]="-v \"$HOME/.spacelift:/home/$DEFAULT_DOCKER_USERNAME/.spacelift\""
-volumes[6]="-v \"$HOME/.terraformrc:/home/$DEFAULT_DOCKER_USERNAME/.terraformrc\""
+# ============================================================================
+# Global Variables
+# ============================================================================
+INTERACTIVE_IMAGE_SELECTION=false
+AWS_PROFILE_STAGE=$AWS_PROFILE
+MOUNT_AWS_CONFIGS=true
+RUN_AS_DAEMON=false
+ATTACH_TO_DAEMON=false
+EXEC_IN_DAEMON=false
+PERFORM_UPDATE=false
+PERFORM_CONFIG_CLEANUP=false
+USE_SESSION_KUBECONFIG=false
+ENABLE_K8S_DASHBOARD=false
+RELEASE_CHANNEL=
+CURRENT_USER=${HOME##*/}
+DOCKER_IS_RUNNING=false
 
-declare -a ports
+declare -a EXTRA_DOCKER_ARGS
+declare -a AVAILABLE_PORTS
 
-# select 5 random ports that are not in use from range 8000-8999
-for i in {8000..8999}; do
-  if nc -z 127.0.0.1 "${i}" -w2 2>/dev/null; then
-    if [ "${i}" == "8999" ]; then
-      echo "all local ports 8000-8999 are in use"
-      exit 1
-    else
-      continue
-    fi
-  else
-    ports+=("${i}")
-  fi
+# ============================================================================
+# Initialization
+# ============================================================================
 
-  if [ "${#ports[@]}" == "5" ]; then
-    break
-  fi
-done
-
+# Ensure required directories and files exist
 [ ! -f "$HOME/.terraformrc" ] && touch "$HOME/.terraformrc"
 [ ! -d "$HOME/.spacelift" ] && mkdir -p "$HOME/.spacelift"
 
+# Find 5 available ports in range 8000-8999
+for port in {8000..8999}; do
+  nc -z 127.0.0.1 "${port}" -w2 2>/dev/null && continue
+  AVAILABLE_PORTS+=("${port}")
+  [ "${#AVAILABLE_PORTS[@]}" -eq 5 ] && break
+  [ "${port}" -eq 8999 ] && echo "All local ports 8000-8999 are in use" && exit 1
+done
+
+# ============================================================================
+# Helper Functions
+# ============================================================================
+
 function print_usage() {
-  echo
-  echo "Usage: $0 [-e] [-v] [-h] [-i] [-d] [-a] [-E] [-c] [-o] [-u] [-x] [-s] [-r]"
-  echo '-e: Environment example (AWS_PROFILE NAME: mediasites-stage.dev|mediasites-prod.admin)'
-  echo '-v: DO NOT USE a Docker volume mount for local .aws, .ssh, .helm and .kube configs inside the container.'
-  echo '-h: Print this help text'
-  echo '-i: Ask for a local Docker image to use'
-  echo '-d: create daemon container that runs in the background, so you can use docker exec to connect to'
-  echo '-a: attach to daemon container that previously created with -d option'
-  echo '-E: execute a command in the daemon container that previously created with -d option'
-  echo '-c: cleanup/delete your actual .aws/config, .aws/credentials and .kube/config-* files, backup of old files will be created .aws/config-$DATE, e.g. .aws/config-20220504123050'
-  echo '-o: add additional cmd parameter to docker run/create command, IMPORTANT: use double quotes! you can use this option more than one time, e.g. -o "-p 2222:22" -o "-e DISPLAY=host.docker.internal:0"'
-  echo '-u: update maps-tools and docker image (force pull), to get testing versions use "-u testing"'
-  echo '-x: start with kubernetes dashboard http://0.0.0.0:7777/'
-  echo '-s: start a container with individual kube context'
-  echo '--version: Print maps-tools script version and exit'
+  cat <<EOF
 
-  echo
+maps-tools - Docker-based tooling environment for AWS, Kubernetes, and Terraform
 
+USAGE:
+  $0 [OPTIONS]
+
+COMMON OPTIONS:
+  -h              Show this help message and exit
+  --version       Print version number and exit
+
+ENVIRONMENT OPTIONS:
+  -e PROFILE      Set AWS profile/environment (e.g., mediasites-stage.dev)
+                  Default: Uses \$AWS_PROFILE if set
+
+CONTAINER MODES:
+  (default)       Run interactive container (removed after exit)
+  -d              Create persistent daemon container in background
+  -a              Attach to existing daemon container
+  -E              Execute command in existing daemon container
+
+CONFIGURATION:
+  -v              Skip mounting local config directories (.aws, .ssh, .helm, .kube)
+                  Use when you want an isolated container environment
+  -s              Use session-specific kubeconfig instead of shared config
+  -c              Backup and cleanup AWS and Kubernetes config files
+                  Creates timestamped backups before removal
+
+DOCKER OPTIONS:
+  -i              Interactively select from locally available Docker images
+  -o "ARGS"       Pass additional arguments to docker run/create
+                  Can be used multiple times. Example: -o "-p 8080:8080"
+
+FEATURES:
+  -x              Enable Kubernetes dashboard (Octant) at http://0.0.0.0:7777/
+  -u [VERSION]    Check for updates and optionally install
+                  Optional: -u testing (for testing release channel)
+
+EXAMPLES:
+  # Run standard interactive container
+  $0
+
+  # Run with specific AWS profile
+  $0 -e mediasites-prod.admin
+
+  # Create background daemon container
+  $0 -d
+
+  # Attach to running daemon
+  $0 -a
+
+  # Run with Kubernetes dashboard
+  $0 -x
+
+  # Expose additional port and set environment variable
+  $0 -o "-p 9090:9090" -o "-e MY_VAR=value"
+
+  # Check for updates
+  $0 -u
+
+NOTES:
+  - Daemon mode (-d) and attach mode (-a) are mutually exclusive
+  - The container automatically mounts your home directory and configs
+  - Five random ports (8000-8999) are automatically exposed
+  - Use -v to prevent mounting configs for a clean environment
+
+For more information, visit: https://github.com/spring-media/maps-tools
+
+EOF
   exit 0
 }
 
-function create_docker_run_command() {
-  [ $# -lt 1 ] && echo ❌ No image name given to function \"create_docker_run_command\" && return
-  local docker_string=""
+# Check if container exists and its state
+function get_container_state() {
+  local name="$1"
+  if docker ps --format "{{.Names}}" --filter "name=${name}" 2>/dev/null | grep -q "^${name}$"; then
+    echo "running"
+  elif docker ps -a --format "{{.Names}}" --filter "name=${name}" 2>/dev/null | grep -q "^${name}$"; then
+    echo "stopped"
+  else
+    echo "none"
+  fi
+}
+
+# Add volume mounts to docker command array
+function add_volume_mounts() {
+  DOCKER_CMD+=("-v" "$HOME:/home/$CURRENT_USER")
+  
+  if [ "${MOUNT_AWS_CONFIGS}" = "true" ]; then
+    DOCKER_CMD+=("-v" "$HOME/.aws:/home/$DEFAULT_DOCKER_USERNAME/.aws")
+    DOCKER_CMD+=("-v" "$HOME/.ssh:/home/$DEFAULT_DOCKER_USERNAME/.ssh")
+    DOCKER_CMD+=("-v" "$HOME/.helm:/home/$DEFAULT_DOCKER_USERNAME/.helm")
+    DOCKER_CMD+=("-v" "$HOME/.kube:/home/$DEFAULT_DOCKER_USERNAME/.kube")
+    DOCKER_CMD+=("-v" "$HOME/.spacelift:/home/$DEFAULT_DOCKER_USERNAME/.spacelift")
+    DOCKER_CMD+=("-v" "$HOME/.terraformrc:/home/$DEFAULT_DOCKER_USERNAME/.terraformrc")
+  fi
+}
+
+# Add port mappings to docker command array
+function add_port_mappings() {
+  for port in ${AVAILABLE_PORTS[@]}; do
+    DOCKER_CMD+=("-p" "${port}:${port}")
+  done
+}
+
+# Add environment variables to docker command array
+function add_environment_vars() {
+  local container_start_path="$PWD"
+  if echo "$container_start_path" | grep -q "$HOME"; then
+    container_start_path=$(echo "$container_start_path" | sed "s|Users|home|")
+  else
+    container_start_path="/home/$USER"
+  fi
+  
+  DOCKER_CMD+=("-e" "AWS_PROFILE=$AWS_PROFILE_STAGE")
+  DOCKER_CMD+=("-e" "DEFAULT_SESSION_KUBECONFIG=$USE_SESSION_KUBECONFIG")
+  DOCKER_CMD+=("-e" "START_PATH=$container_start_path")
+  DOCKER_CMD+=("-e" "K8S_DASHBOARD=$ENABLE_K8S_DASHBOARD")
+  
+  if [ ${#AVAILABLE_PORTS[@]} -gt 0 ]; then
+    DOCKER_CMD+=("-e" "PORT_VARIABLE=${AVAILABLE_PORTS[*]}")
+  fi
+  
+  if [ "${ENABLE_K8S_DASHBOARD}" = "true" ]; then
+    DOCKER_CMD+=("-e" "OCTANT_LISTENER_ADDR=0.0.0.0:7777")
+    DOCKER_CMD+=("-p" "7777:7777")
+  fi
+}
+
+# Build complete Docker command based on operation mode
+function build_docker_command() {
+  if [ $# -lt 1 ]; then
+    echo "❌ No image name provided"
+    return 1
+  fi
+  
   local image_name="$1"
   shift
-  local exec_args="$*"
-  local start_path=""
-
-  if [ "${#ports[@]}" == "0" ]; then
-    ports_string=""
-  else
-    for value in "${ports[@]}"; do
-      ports_string+="-p ${value}:${value} "
-      port_variable+="${value} "
-    done
-  fi
-
-  if [[ "${K8S_DASHBOARD}" == true ]]; then
-    dashboard_string=" -p 7777:7777 -e OCTANT_LISTENER_ADDR=0.0.0.0:7777 -e K8S_DASHBOARD=true "
-  else
-    dashboard_string=" -e K8S_DASHBOARD=false "
-  fi
-
-  start_path=$PWD
-  if [[ $start_path =~ "$HOME" ]]; then
-    start_path="${start_path//Users/home}"
-  else
-    start_path="/home/$USER"
-  fi
-
-  case true in
-  "$CREATE_DAEMON_CONTAINER")
-    if [[ $(docker ps -a --format "{{.Names}}" --filter "name=maps-tools") == "maps-tools" ]]; then
-      docker rm -f maps-tools 2>&1 >/dev/null
+  local command_to_exec="$*"
+  local container_state=$(get_container_state "maps-tools")
+  
+  DOCKER_CMD=()
+  
+  # Build command based on operation mode
+  if [ "${RUN_AS_DAEMON}" = "true" ]; then
+    if [ "$container_state" != "none" ]; then
+      docker rm -f maps-tools >/dev/null 2>&1
     fi
-    if [[ "${USE_AWS_VOLUME}" == true ]]; then
-      docker_string="docker create --name maps-tools ${volumes[*]} ${ports_string} ${dashboard_string} -e \"PORT_VARIABLE=$port_variable\" -e \"AWS_PROFILE=$DEFAULT_STAGE\" -e \"DEFAULT_SESSION_KUBECONFIG=$SESSION_KUBECONFIG\" -e \"START_PATH=$start_path\" ${ADDITIONAL_CONTAINER_ARGS[@]} --entrypoint \"/init/init_daemon.sh\" $image_name"
-    else
-      docker_string="docker create --name maps-tools ${volumes[1]} ${ports_string} ${dashboard_string} -e \"PORT_VARIABLE=$port_variable\" -e \"AWS_PROFILE=$DEFAULT_STAGE\" -e \"DEFAULT_SESSION_KUBECONFIG=$SESSION_KUBECONFIG\" -e \"START_PATH=$start_path\" ${ADDITIONAL_CONTAINER_ARGS[@]} --entrypoint \"/init/init_daemon.sh\" $image_name"
-    fi
-    ;;
-  "$CONTAINER_ATTACH")
-    if [[ $(docker ps --format "{{.Names}}" --filter "name=maps-tools") == "maps-tools" ]]; then
-      docker_string="docker exec -ti -e \"START_PATH=$start_path\" -e \"AWS_PROFILE=$DEFAULT_STAGE\" -e \"DEFAULT_SESSION_KUBECONFIG=$SESSION_KUBECONFIG\" ${ADDITIONAL_CONTAINER_ARGS[@]} maps-tools /usr/bin/bash --login"
-    elif [[ $(docker ps -a --format "{{.Names}}" --filter "name=maps-tools") == "maps-tools" ]]; then
-      docker_string="docker start maps-tools; docker exec -ti -e \"START_PATH=$start_path\" -e \"AWS_PROFILE=$DEFAULT_STAGE\" -e \"DEFAULT_SESSION_KUBECONFIG=$SESSION_KUBECONFIG\" ${ADDITIONAL_CONTAINER_ARGS[@]} maps-tools /init/init.sh"
-    fi
-    ;;
-  "$CONTAINER_EXEC")
-    if [[ $(docker ps --format "{{.Names}}" --filter "name=maps-tools") == "maps-tools" ]]; then
-      docker_string="docker exec -t -e \"START_PATH=$start_path\" -e \"AWS_PROFILE=$DEFAULT_STAGE\" -e \"DEFAULT_SESSION_KUBECONFIG=$SESSION_KUBECONFIG\" ${ADDITIONAL_CONTAINER_ARGS[@]} maps-tools /usr/bin/bash --login -c \"$exec_args\""
-      echo "DEBUG: Executing: $docker_string" >&2
-    elif [[ $(docker ps -a --format "{{.Names}}" --filter "name=maps-tools") == "maps-tools" ]]; then
-      docker_string="docker start maps-tools; docker exec -t -e \"START_PATH=$start_path\" -e \"AWS_PROFILE=$DEFAULT_STAGE\" -e \"DEFAULT_SESSION_KUBECONFIG=$SESSION_KUBECONFIG\" ${ADDITIONAL_CONTAINER_ARGS[@]} maps-tools /usr/bin/bash --login -c \"$exec_args\""
-      echo "DEBUG: Executing: $docker_string" >&2
-    else
-      echo "No running container named maps-tools found to exec into."
-      exit 1
-    fi
-    ;;
-  *)
-
-    if [[ "${USE_AWS_VOLUME}" == true ]]; then
-      docker_string="docker run -it --rm ${volumes[*]} ${ports_string} ${dashboard_string} -e \"PORT_VARIABLE=$port_variable\" -e \"START_PATH=$start_path\" -e \"AWS_PROFILE=$DEFAULT_STAGE\" -e \"DEFAULT_SESSION_KUBECONFIG=$SESSION_KUBECONFIG\" ${ADDITIONAL_CONTAINER_ARGS[@]} $image_name"
-    else
-      docker_string="docker run -it --rm ${volumes[1]} ${ports_string}  ${dashboard_string} -e \"PORT_VARIABLE=$port_variable\" -e \"START_PATH=$start_path\" -e \"AWS_PROFILE=$DEFAULT_STAGE\" -e \"DEFAULT_SESSION_KUBECONFIG=$SESSION_KUBECONFIG\" ${ADDITIONAL_CONTAINER_ARGS[@]} $image_name"
-    fi
-    ;;
-  esac
-  echo "$docker_string"
-}
-
-function run_docker_image() {
-  local image=${DEFAULT_DOCKER_IMAGE}:${DEFAULT_DOCKER_IMAGE_TAG}
-
-  if [[ "${CREATE_DAEMON_CONTAINER}" == true && "${CONTAINER_ATTACH}" == true ]]; then
-    echo "you cannot use -d and -a Option simultaneously"
-    exit 1
-  elif [[ "${CREATE_DAEMON_CONTAINER}" == true && "${CONTAINER_EXEC}" == true ]]; then
-    echo "you cannot use -d and -E Option simultaneously"
-    exit 1
-  elif [[ "${CONTAINER_ATTACH}" == true && "${CONTAINER_EXEC}" == true ]]; then
-    echo "you cannot use -a and -E Option simultaneously"
-    exit 1
-  fi
-  case true in
-  "$USE_DOCKER_IMAGE")
-    declare -a docker_images=($(docker images | grep ${DEFAULT_DOCKER_IMAGE_NAME} | awk '{ print $1 ":" $2 }'))
-    if [ ${#docker_images[@]} -eq 0 ]; then
-      echo ❌ Image not found. Run \"make build\" or download image from \"GitHub Package Repository\" !
-      exit 1
-    fi
-    PS3="Choose the image to run: "
-    select docker_image_name in "${docker_images[@]}"; do
-      if (($REPLY >= 1 && $REPLY < (("${#docker_images[@]}" + 1)))); then
-        local image="${docker_images[(($REPLY - 1))]}"
-        local docker_run_command="$(create_docker_run_command "$image" "$@")"
-        eval $docker_run_command
+    DOCKER_CMD=(docker create --name maps-tools)
+    add_volume_mounts
+    add_port_mappings
+    add_environment_vars
+    DOCKER_CMD+=("${EXTRA_DOCKER_ARGS[@]}")
+    DOCKER_CMD+=(--entrypoint "/init/init_daemon.sh" "$image_name")
+                
+  elif [ "${ATTACH_TO_DAEMON}" = "true" ]; then
+    if [ "$container_state" = "running" ]; then
+      DOCKER_CMD=(docker exec -ti)
+      DOCKER_CMD+=("-e" "AWS_PROFILE=$AWS_PROFILE_STAGE")
+      DOCKER_CMD+=("-e" "DEFAULT_SESSION_KUBECONFIG=$USE_SESSION_KUBECONFIG")
+      container_start_path="$PWD"
+      if echo "$container_start_path" | grep -q "$HOME"; then
+        container_start_path=$(echo "$container_start_path" | sed "s|Users|home|")
       else
-        echo ❌ Invalid choice && exit 1
+        container_start_path="/home/$USER"
       fi
-      break
-    done
-    ;;
-  *)
-    check_for_updates
-    local docker_run_command="$(create_docker_run_command "$image" "$@")"
-    eval $docker_run_command
-    ;;
-  esac
+      DOCKER_CMD+=("-e" "START_PATH=$container_start_path")
+      DOCKER_CMD+=("${EXTRA_DOCKER_ARGS[@]}")
+      DOCKER_CMD+=(maps-tools /usr/bin/bash --login)
+    elif [ "$container_state" = "stopped" ]; then
+      docker start maps-tools
+      DOCKER_CMD=(docker exec -ti)
+      DOCKER_CMD+=("-e" "AWS_PROFILE=$AWS_PROFILE_STAGE")
+      DOCKER_CMD+=("-e" "DEFAULT_SESSION_KUBECONFIG=$USE_SESSION_KUBECONFIG")
+      container_start_path="$PWD"
+      if echo "$container_start_path" | grep -q "$HOME"; then
+        container_start_path=$(echo "$container_start_path" | sed "s|Users|home|")
+      else
+        container_start_path="/home/$USER"
+      fi
+      DOCKER_CMD+=("-e" "START_PATH=$container_start_path")
+      DOCKER_CMD+=("${EXTRA_DOCKER_ARGS[@]}")
+      DOCKER_CMD+=(maps-tools /init/init.sh)
+    else
+      echo "❌ No container named maps-tools found to attach to"
+      return 1
+    fi
+    
+  elif [ "${EXEC_IN_DAEMON}" = "true" ]; then
+    if [ "$container_state" = "none" ]; then
+      echo "❌ No container named maps-tools found"
+      return 1
+    fi
+    
+    if [ "$container_state" = "stopped" ]; then
+      docker start maps-tools
+    fi
+    
+    DOCKER_CMD=(docker exec -t)
+    DOCKER_CMD+=("-e" "AWS_PROFILE=$AWS_PROFILE_STAGE")
+    DOCKER_CMD+=("-e" "DEFAULT_SESSION_KUBECONFIG=$USE_SESSION_KUBECONFIG")
+    container_start_path="$PWD"
+    if echo "$container_start_path" | grep -q "$HOME"; then
+      container_start_path=$(echo "$container_start_path" | sed "s|Users|home|")
+    else
+      container_start_path="/home/$USER"
+    fi
+    DOCKER_CMD+=("-e" "START_PATH=$container_start_path")
+    DOCKER_CMD+=("${EXTRA_DOCKER_ARGS[@]}")
+    DOCKER_CMD+=(maps-tools /usr/bin/bash --login -c "$command_to_exec")
+    echo "DEBUG: Executing: ${DOCKER_CMD[*]}" >&2
+    
+  else
+    # Standard interactive container run
+    DOCKER_CMD=(docker run -it --rm)
+    add_volume_mounts
+    add_port_mappings
+    add_environment_vars
+    DOCKER_CMD+=("${EXTRA_DOCKER_ARGS[@]}")
+    DOCKER_CMD+=("$image_name")
+  fi
 }
 
-function get_script() {
-  # Always download from repository for initial installation
-  # Only use local copy during development/updates when explicitly running from repo
-  local use_local=false
+# Validate that mutually exclusive options aren't used together
+function validate_mutually_exclusive_options() {
+  local active_mode_count=0
+  [[ "${RUN_AS_DAEMON}" == true ]] && ((active_mode_count++))
+  [[ "${ATTACH_TO_DAEMON}" == true ]] && ((active_mode_count++))
+  [[ "${EXEC_IN_DAEMON}" == true ]] && ((active_mode_count++))
   
-  # Check if we're in a development context (running from repo directory)
-  if [ -f ./maps-tools ] && [ -d ./.git ] && [ -x /usr/local/bin/maps-tools ]; then
-    use_local=true
+  if [[ $active_mode_count -gt 1 ]]; then
+    echo "❌ Options -d, -a, and -E are mutually exclusive"
+    exit 1
   fi
+}
+
+function run_container() {
+  validate_mutually_exclusive_options
   
-  if [ "$use_local" = true ]; then
-    if ! cp -f ./maps-tools /tmp/maps-tools; then
-      echo "Error: Failed to copy local maps-tools script"
+  local selected_image="${DEFAULT_DOCKER_IMAGE}:${DEFAULT_DOCKER_IMAGE_TAG}"
+
+  if [ "${INTERACTIVE_IMAGE_SELECTION}" = "true" ]; then
+    available_images=$(docker images | grep "${DEFAULT_DOCKER_IMAGE_NAME}" | awk '{ print $1 ":" $2 }')
+    
+    if [ -z "$available_images" ]; then
+      echo "❌ No local images found. Run 'make build' or pull from registry"
       exit 1
     fi
-  else
-    if [[ -z "$RELEASE" ]]; then
-      if ! curl -sf https://raw.githubusercontent.com/spring-media/maps-tools-install/main/maps-tools >/tmp/maps-tools; then
-        echo "Error: Failed to download maps-tools script from repository"
+    
+    PS3="Choose the image to run: "
+    select selected_image in $available_images; do
+      if [ -n "$selected_image" ]; then
+        break
+      else
+        echo "❌ Invalid choice"
         exit 1
       fi
-    else
-      if ! curl -sf "https://raw.githubusercontent.com/spring-media/maps-tools-install/main/maps-tools${RELEASE}" >/tmp/maps-tools; then
-        echo "Error: Failed to download maps-tools${RELEASE} script from repository"
-        exit 1
-      fi
-    fi
+    done
+  else
+    check_and_prompt_for_updates
   fi
   
-  # Verify the downloaded/copied file is not empty and contains version info
-  if [ ! -s /tmp/maps-tools ]; then
-    echo "Error: Downloaded maps-tools script is empty"
-    rm -f /tmp/maps-tools
-    exit 1
+  build_docker_command "$selected_image" "$@"
+  "${DOCKER_CMD[@]}"
+}
+
+# ============================================================================
+# Update & Installation Functions
+# ============================================================================
+
+function download_latest_script() {
+  local source_url="https://raw.githubusercontent.com/spring-media/maps-tools-install/main/maps-tools${RELEASE_CHANNEL}"
+  
+  # Use local copy in development context
+  if [[ -f ./maps-tools && -d ./.git && -x /usr/local/bin/maps-tools ]]; then
+    cp -f ./maps-tools /tmp/maps-tools || { echo "❌ Failed to copy local script"; exit 1; }
+  else
+    curl -sf "$source_url" >/tmp/maps-tools || { echo "❌ Failed to download from $source_url"; exit 1; }
   fi
   
-  if ! grep -q "#version:" /tmp/maps-tools; then
-    echo "Error: Downloaded maps-tools script appears to be corrupted (no version found)"
-    rm -f /tmp/maps-tools
-    exit 1
-  fi
+  # Validate downloaded script
+  [[ ! -s /tmp/maps-tools ]] && echo "❌ Downloaded script is empty" && rm -f /tmp/maps-tools && exit 1
+  grep -q "#version:" /tmp/maps-tools || { echo "❌ Script corrupted (no version found)"; rm -f /tmp/maps-tools; exit 1; }
 }
 
-function install_script() {
-  if [ -f /tmp/maps-tools ]; then
-    echo "If asked, enter your AD password to install maps-tools into /usr/local/bin/maps-tools"
-    cp -f /tmp/maps-tools /usr/local/bin/maps-tools 1>&- 2>&- || sudo cp -f /tmp/maps-tools /usr/local/bin/maps-tools
-    chmod 755 /usr/local/bin/maps-tools 1>&- 2>&- || sudo chmod 755 /usr/local/bin/maps-tools
-  else
-    echo "no version of maps-tools found for installation"
-    exit 1
-  fi
+function install_script_to_system() {
+  [[ ! -f /tmp/maps-tools ]] && echo "❌ No script found for installation" && exit 1
+  
+  echo "Installing maps-tools to /usr/local/bin (may require password)"
+  cp -f /tmp/maps-tools /usr/local/bin/maps-tools 2>/dev/null || \
+    sudo cp -f /tmp/maps-tools /usr/local/bin/maps-tools
+  chmod 755 /usr/local/bin/maps-tools 2>/dev/null || \
+    sudo chmod 755 /usr/local/bin/maps-tools
 }
 
-function check_for_updates() {
-  get_script
-  if [ -f /tmp/maps-tools ]; then
-    local version=$(grep -m 1 "#version:" /usr/local/bin/maps-tools | awk '{print $2}')
-    local new_version=$(grep -m 1 "#version:" /tmp/maps-tools | awk '{print $2}')
-    if [[ -n "$version" && -n "$new_version" && "$version" -lt "$new_version" ]]; then
-      read -p "There is a new version of maps-tools available. Do you want to update maps-tools and docker image? (y/n)" yn
-      if [ "$yn" == "y" ]; then
-        echo "upgrading maps-tools to version ${new_version}"
-        install_script
-        docker_pull
-      fi
-    else
-      echo "no upgrade available for maps-tools"
+function check_and_prompt_for_updates() {
+  download_latest_script
+  
+  local installed_version=$(grep -m 1 "#version:" /usr/local/bin/maps-tools 2>/dev/null | awk '{print $2}')
+  local available_version=$(grep -m 1 "#version:" /tmp/maps-tools | awk '{print $2}')
+  
+  if [[ -n "$installed_version" && -n "$available_version" && "$installed_version" -lt "$available_version" ]]; then
+    read -p "New version available ($installed_version → $available_version). Update? (y/n) " response
+    if [[ "$response" == "y" ]]; then
+      echo "Upgrading to version ${available_version}"
+      install_script_to_system
+      pull_docker_image
     fi
   else
-    echo "no version of maps-tools found for installation"
-    exit 1
+    echo "maps-tools is up to date (v${installed_version})"
   fi
-  cleanup_tmp
+  
+  rm -f /tmp/maps-tools
 }
 
-function cleanup_tmp() {
-  if [ -f /tmp/maps-tools ]; then
-    rm -f /tmp/maps-tools
-  fi
+function pull_docker_image() {
+  local image_tag="${RELEASE_CHANNEL#-}"
+  [[ -z "$image_tag" ]] && image_tag="${DEFAULT_DOCKER_IMAGE_TAG}"
+  docker pull "${DEFAULT_DOCKER_IMAGE}:${image_tag}"
 }
 
-function docker_pull() {
-  if [[ -z $RELEASE ]]; then
-    docker pull ${DEFAULT_DOCKER_IMAGE}:${DEFAULT_DOCKER_IMAGE_TAG}
-  else
-    RELEASE_CUT=$(echo "$RELEASE" | sed 's/^-//')
-    docker pull ${DEFAULT_DOCKER_IMAGE}:${RELEASE_CUT}
-  fi
-}
+# ============================================================================
+# Configuration Management
+# ============================================================================
 
-function getopts_get_optional_argument() {
+function parse_optional_argument() {
   eval next_token=\${$OPTIND}
   if [[ -n $next_token && $next_token != -* ]]; then
     OPTIND=$((OPTIND + 1))
@@ -291,185 +388,139 @@ function getopts_get_optional_argument() {
   fi
 }
 
-function cleanup_configs() {
-  [[ -s "${HOME}/.aws/config" ]] &&
-    {
-      echo "safe old ${HOME}/.aws/config to ${HOME}/.aws/config-$(date +%Y%m%d%H%M%S)"
-      mv -f ${HOME}/.aws/config ${HOME}/.aws/config-$(date +%Y%m%d%H%M%S)
-    }
-  [[ -s "${HOME}/.aws/credentials" ]] &&
-    {
-      echo "safe old ${HOME}/.aws/credentials to ${HOME}/.aws/credentials-$(date +%Y%m%d%H%M%S)"
-      mv -f ${HOME}/.aws/credentials ${HOME}/.aws/credentials-$(date +%Y%m%d%H%M%S)
-    }
-  [[ -s "${HOME}/.aws/awsctx" ]] &&
-    {
-      echo "safe old ${HOME}/.aws/awsctx to ${HOME}/.aws/awsctx-$(date +%Y%m%d%H%M%S)"
-      mv -f ${HOME}/.aws/awsctx ${HOME}/.aws/awsctx-$(date +%Y%m%d%H%M%S)
-    }
-  [[ -s "${HOME}/.kube/config" ]] &&
-    {
-      echo "safe old ${HOME}/.kube/config to ${HOME}/.kube/config-$(date +%Y%m%d%H%M%S)"
-      mv -f ${HOME}/.kube/config ${HOME}/.kube/config-$(date +%Y%m%d%H%M%S)
-    }
-  for i in ${HOME}/.kube/*config-*; do
-    [[ -s "${i}" ]] &&
-      {
-        echo "safe old ${i} to ${i%/*}/backup-${i#*/*config-}-$(date +%Y%m%d%H%M%S)"
-        mv -f ${i} ${i%/*}/backup-${i#*/*config-}-$(date +%Y%m%d%H%M%S)
-      }
+function backup_config_file() {
+  local filepath="$1"
+  [[ ! -s "$filepath" ]] && return
+  local timestamp=$(date +%Y%m%d%H%M%S)
+  local backup_path="${filepath}-${timestamp}"
+  echo "Backing up $filepath to $backup_path"
+  mv -f "$filepath" "$backup_path"
+}
+
+function backup_all_configs() {
+  backup_config_file "${HOME}/.aws/config"
+  backup_config_file "${HOME}/.aws/credentials"
+  backup_config_file "${HOME}/.aws/awsctx"
+  backup_config_file "${HOME}/.kube/config"
+  
+  for config_file in ${HOME}/.kube/*config-*; do
+    [[ -s "$config_file" ]] || continue
+    local timestamp=$(date +%Y%m%d%H%M%S)
+    local filename="${config_file##*/}"
+    local backup_path="${config_file%/*}/backup-${filename#*config-}-${timestamp}"
+    echo "Backing up $config_file to $backup_path"
+    mv -f "$config_file" "$backup_path"
   done
 }
 
-# Handle --version flag before proceeding
-if [[ "$1" == "--version" ]]; then
-  version=$(grep -m 1 "#version:" "$0" | awk '{print $2}')
-  echo "maps-tools version: $version"
-  exit 0
-fi
+# ============================================================================
+# Main Script Logic
+# ============================================================================
 
-# Parse flags
-while getopts "b:o:he:ivdaucsxE" argument; do
-  case "${argument}" in
-  b)
-    # Will be eventually used for additional BUILD ARGs later. Currently, the only BUILD ARG is directly
-    # handled in "create_docker_run_command"
-    echo 🛠️ TODO !
-    ;;
-  e)
-    DEFAULT_STAGE="${OPTARG}"
-    ;;
-  v)
-    USE_AWS_VOLUME=false
-    ;;
-  i)
-    USE_DOCKER_IMAGE=true
-    ;;
-  d)
-    CREATE_DAEMON_CONTAINER=true
-    ;;
-  a)
-    CONTAINER_ATTACH=true
-    ;;
-  E)
-    CONTAINER_EXEC=true
-    ;;
-  c)
-    CLEANUP_CONFIGS=true
-    ;;
-  s)
-    SESSION_KUBECONFIG=true
-    ;;
-  u)
-    getopts_get_optional_argument $@
-    if [[ "${OPTARG}" == "testing" ]]; then
-      RELEASE="-testing"
-    elif [[ -n "${OPTARG}" ]]; then
-      RELEASE="-${OPTARG}"
-    else
-      RELEASE=""
-    fi
-    UPDATE=true
-    ;;
-  o)
-    ADDITIONAL_CONTAINER_ARGS+=("$OPTARG")
-    ;;
-  x)
-    K8S_DASHBOARD=true
-    ;;
+# Handle version flag
+[[ "$1" == "--version" ]] && echo "maps-tools version: $(grep -m 1 "#version:" "$0" | awk '{print $2}')" && exit 0
 
-  h | ? | *)
-    print_usage
-    ;;
+# Parse command line options
+while getopts "b:o:he:ivdaucsxE" arg; do
+  case "${arg}" in
+    b) echo "🛠️  TODO: Build args not yet implemented" ;;
+    e) AWS_PROFILE_STAGE="${OPTARG}" ;;
+    v) MOUNT_AWS_CONFIGS=false ;;
+    i) INTERACTIVE_IMAGE_SELECTION=true ;;
+    d) RUN_AS_DAEMON=true ;;
+    a) ATTACH_TO_DAEMON=true ;;
+    E) EXEC_IN_DAEMON=true ;;
+    c) PERFORM_CONFIG_CLEANUP=true ;;
+    s) USE_SESSION_KUBECONFIG=true ;;
+    u)
+      parse_optional_argument "$@"
+      RELEASE_CHANNEL="${OPTARG:+-${OPTARG}}"
+      PERFORM_UPDATE=true
+      ;;
+    o) EXTRA_DOCKER_ARGS+=("$OPTARG") ;;
+    x) ENABLE_K8S_DASHBOARD=true ;;
+    h|?|*) print_usage ;;
   esac
 done
 shift $((OPTIND - 1))
 
-#self installation or upgrade
-if [ ! -x /usr/local/bin/maps-tools ]; then
-  echo "installing maps-tools to /usr/local/bin"
-  echo ""
-  get_script
-  install_script
-  cleanup_tmp
+# Handle initial installation
+if [[ ! -x /usr/local/bin/maps-tools ]]; then
+  echo "Installing maps-tools to /usr/local/bin"
+  download_latest_script
+  install_script_to_system
+  rm -f /tmp/maps-tools
+  
+  cat <<EOF
 
-  echo 'add /usr/local/bin to your $PATH environment variable'
-  echo 'for example:'
-  echo ''
-  echo 'bash:'
-  echo 'echo export PATH="/usr/local/bin:\$PATH" >> ${HOME}/.bashrc && source ${HOME}/.bashrc'
-  echo 'zsh:'
-  echo 'echo export PATH="/usr/local/bin:\$PATH" >> ${HOME}/.zshrc && source ${HOME}/.zshrc'
-  echo ''
-  exit 0
-elif [ -x /usr/local/bin/maps-tools ] && [ "$UPDATE" = true ]; then
-  check_for_updates
-  exit 0
-elif [ -x /usr/local/bin/maps-tools ] && [ "${0##*/}" != "maps-tools" ]; then
-  check_for_updates
+Add /usr/local/bin to your \$PATH:
+
+bash:  echo 'export PATH="/usr/local/bin:\$PATH"' >> ~/.bashrc && source ~/.bashrc
+zsh:   echo 'export PATH="/usr/local/bin:\$PATH"' >> ~/.zshrc && source ~/.zshrc
+
+EOF
   exit 0
 fi
 
-#cleanup aws and kube config
-if [[ "$CLEANUP_CONFIGS" == "true" ]]; then
-  while true; do
-    read -p "Are you really sure to cleanup your .aws and .kube config files?" yn
-    case $yn in
-    [Yy]*)
-      cleanup_configs
-      break
-      ;;
-    *)
-      echo "nothing clean up"
-      break
-      ;;
-    esac
-  done
+# Handle update request
+if [[ "$PERFORM_UPDATE" == true ]] || [[ "${0##*/}" != "maps-tools" ]]; then
+  check_and_prompt_for_updates
   exit 0
 fi
 
-#check docker is installed
-if [ ! -d "/Applications/Rancher Desktop.app" ] && [ ! -d "/Applications/Docker.app" ]; then
-  echo "No Rancher Desktop or Docker Desktop found, only these are official supported"
+# Handle config cleanup
+if [[ "$PERFORM_CONFIG_CLEANUP" == true ]]; then
+  read -p "Are you sure you want to backup and cleanup .aws and .kube configs? (y/n) " response
+  [[ "$response" == [Yy]* ]] && backup_all_configs || echo "Cleanup cancelled"
+  exit 0
 fi
 
-if [ $(lsof -U | grep docker.sock | wc -l) -gt 0 ]; then
+# Verify Docker installation
+if [[ ! -d "/Applications/Rancher Desktop.app" && ! -d "/Applications/Docker.app" ]]; then
+  echo "⚠️  Warning: Rancher Desktop or Docker Desktop not found (officially supported)"
+fi
+
+# Start Docker if needed
+function is_docker_running() {
+  lsof -U 2>/dev/null | grep -q docker.sock
+}
+
+if is_docker_running; then
   echo "Docker is running"
-  DOCKER_STARTED=true
+  DOCKER_IS_RUNNING=true
 else
-  if [ -e "/Applications/Rancher Desktop.app" ]; then
-    echo "Starting Rancher Desktop"
-    open /Applications/Rancher\ Desktop.app
-    echo "please use the dockerd runtime with Rancher Desktop - containerd is not supported yet"
-  elif [ -e "/Applications/Docker.app" ]; then
+  # Try to start Docker
+  if [[ -e "/Applications/Rancher Desktop.app" ]]; then
+    echo "Starting Rancher Desktop (use dockerd runtime, not containerd)"
+    open "/Applications/Rancher Desktop.app"
+  elif [[ -e "/Applications/Docker.app" ]]; then
     echo "Starting Docker Desktop"
-    open /Applications/Docker.app
+    open "/Applications/Docker.app"
   fi
-
-  START_CNT=0
-  STEP_CNT=5
-  MAX_CNT=$((240 / STEP_CNT))
-  while [ $START_CNT -lt $MAX_CNT ]; do
-    sleep $STEP_CNT
-    ((START_CNT++))
+  
+  # Wait for Docker to start (up to 4 minutes)
+  echo -n "Waiting for Docker"
+  for ((attempt=0; attempt<48; attempt++)); do
+    sleep 5
     echo -n "."
-    if [ $(lsof -U | grep docker.sock | wc -l) -gt 0 ]; then
+    if is_docker_running; then
       echo
-      echo "Docker was started"
-      START_CNT=$MAX_CNT
-      DOCKER_STARTED=true
+      echo "Docker started successfully"
+      DOCKER_IS_RUNNING=true
       sleep 5
+      break
     fi
   done
-
-  echo
-  if [ "$DOCKER_STARTED" != true ]; then
-    echo "Docker couldn't be started"
+  
+  if [[ "$DOCKER_IS_RUNNING" != true ]]; then
+    echo
+    echo "❌ Failed to start Docker within timeout"
     exit 1
   fi
 fi
 
-# Call function to obtain the proper call to docker run
-if [ $DOCKER_STARTED ]; then
-  run_docker_image "$@"
+# Run the Docker container
+if [[ "$DOCKER_IS_RUNNING" == true ]]; then
+  echo "🚀 maps-tools v$(grep -m 1 "#version:" "$0" | awk '{print $2}')"
+  run_container "$@"
 fi
