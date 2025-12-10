@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# RELEASE: testing
 
 #needs to increment on every change!!!
 #version: 58
@@ -481,10 +482,23 @@ function backup_all_configs() {
 # Main Script Logic
 # ============================================================================
 
-# Auto-detect release channel from script name if not already set
+# Auto-detect release channel from script name or BASH_SOURCE if not already set
 if [[ -z "$RELEASE_CHANNEL" ]]; then
   script_name="${0##*/}"
-  if [[ "$script_name" == "maps-tools-testing" ]]; then
+  
+  # When run via curl pipe (bash <(curl ...)), $0 is "bash" or "-bash"
+  # Check BASH_SOURCE or try to infer from /dev/fd/XX which contains the script
+  if [[ "$script_name" == "bash" || "$script_name" == "-bash" ]]; then
+    # Try to read the script content from stdin/fd to detect channel
+    if [[ -n "${BASH_SOURCE[0]}" && "${BASH_SOURCE[0]}" =~ /dev/fd/ ]]; then
+      # Read first 20 lines to check for a RELEASE marker comment
+      # The release process should add: # RELEASE: testing (or other channel name)
+      script_content=$(head -20 "${BASH_SOURCE[0]}" 2>/dev/null || echo "")
+      if [[ "$script_content" =~ \#[[:space:]]*RELEASE:[[:space:]]*([a-z]+) ]]; then
+        RELEASE_CHANNEL="-${BASH_REMATCH[1]}"
+      fi
+    fi
+  elif [[ "$script_name" == "maps-tools-testing" ]]; then
     RELEASE_CHANNEL="-testing"
   elif [[ "$script_name" =~ ^maps-tools-(.+)$ ]]; then
     RELEASE_CHANNEL="-${BASH_REMATCH[1]}"
