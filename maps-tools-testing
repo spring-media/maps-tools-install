@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-# RELEASE: testing
 
 #needs to increment on every change!!!
 #version: 58
@@ -26,7 +25,7 @@ PERFORM_UPDATE=false
 PERFORM_CONFIG_CLEANUP=false
 USE_SESSION_KUBECONFIG=false
 ENABLE_K8S_DASHBOARD=false
-RELEASE_CHANNEL=
+RELEASE=testing
 CURRENT_USER=${HOME##*/}
 DOCKER_IS_RUNNING=false
 
@@ -294,7 +293,10 @@ function validate_mutually_exclusive_options() {
 function run_container() {
   validate_mutually_exclusive_options
   
-  local selected_image="${DEFAULT_DOCKER_IMAGE}:${DEFAULT_DOCKER_IMAGE_TAG}"
+  # Determine image tag based on RELEASE_CHANNEL
+  local image_tag="${RELEASE_CHANNEL#-}"  # Remove leading dash from RELEASE_CHANNEL
+  [[ -z "$image_tag" ]] && image_tag="${DEFAULT_DOCKER_IMAGE_TAG}"
+  local selected_image="${DEFAULT_DOCKER_IMAGE}:${image_tag}"
 
   if [ "${INTERACTIVE_IMAGE_SELECTION}" = "true" ]; then
     available_images=$(docker images | grep "${DEFAULT_DOCKER_IMAGE_NAME}" | awk '{ print $1 ":" $2 }')
@@ -338,12 +340,6 @@ function download_latest_script() {
   # Validate downloaded script
   [[ ! -s /tmp/maps-tools ]] && echo "❌ Downloaded script is empty" && rm -f /tmp/maps-tools && exit 1
   grep -q "#version:" /tmp/maps-tools || { echo "❌ Script corrupted (no version found)"; rm -f /tmp/maps-tools; exit 1; }
-  
-  # Extract and preserve the release channel from the downloaded script's URL
-  # This is important when script is run via curl pipe (bash <(curl ...))
-  if [[ -z "$RELEASE_CHANNEL" && "$source_url" =~ maps-tools-([^/]+)$ ]]; then
-    export RELEASE_CHANNEL="-${BASH_REMATCH[1]}"
-  fi
 }
 
 function install_script_to_system() {
@@ -482,28 +478,8 @@ function backup_all_configs() {
 # Main Script Logic
 # ============================================================================
 
-# Auto-detect release channel from script name or BASH_SOURCE if not already set
-if [[ -z "$RELEASE_CHANNEL" ]]; then
-  script_name="${0##*/}"
-  
-  # When run via curl pipe (bash <(curl ...)), $0 is "bash" or "-bash"
-  # Check BASH_SOURCE or try to infer from /dev/fd/XX which contains the script
-  if [[ "$script_name" == "bash" || "$script_name" == "-bash" ]]; then
-    # Try to read the script content from stdin/fd to detect channel
-    if [[ -n "${BASH_SOURCE[0]}" && "${BASH_SOURCE[0]}" =~ /dev/fd/ ]]; then
-      # Read first 20 lines to check for a RELEASE marker comment
-      # The release process should add: # RELEASE: testing (or other channel name)
-      script_content=$(head -20 "${BASH_SOURCE[0]}" 2>/dev/null || echo "")
-      if [[ "$script_content" =~ \#[[:space:]]*RELEASE:[[:space:]]*([a-z]+) ]]; then
-        RELEASE_CHANNEL="-${BASH_REMATCH[1]}"
-      fi
-    fi
-  elif [[ "$script_name" == "maps-tools-testing" ]]; then
-    RELEASE_CHANNEL="-testing"
-  elif [[ "$script_name" =~ ^maps-tools-(.+)$ ]]; then
-    RELEASE_CHANNEL="-${BASH_REMATCH[1]}"
-  fi
-fi
+# Use embedded RELEASE variable (set by release process) or allow CLI override
+RELEASE_CHANNEL="${RELEASE:+-$RELEASE}"
 
 # Handle version flag
 [[ "$1" == "--version" ]] && echo "maps-tools version: $(grep -m 1 "#version:" "$0" | awk '{print $2}')" && exit 0
