@@ -384,14 +384,9 @@ function check_docker_image_update() {
   # Compare digests
   if [[ "$local_digest" != "$remote_digest" ]]; then
     echo "🔄 New Docker image available: ${full_image}"
-    read -p "Do you want to download the new image? (y/n) " response
-    if [[ "$response" == "y" || "$response" == "Y" ]]; then
-      echo "Downloading new image..."
-      docker pull "${full_image}"
-      echo "✅ Docker image updated successfully"
-    else
-      echo "Skipping image download. Run 'maps-tools -u' to update later."
-    fi
+    echo "Downloading new image..."
+    docker pull "${full_image}"
+    echo "✅ Docker image updated successfully"
     return 0
   else
     echo "✅ Docker image is up to date: ${full_image}"
@@ -425,7 +420,7 @@ function check_and_prompt_for_updates() {
   
   if [[ "$script_updated" == true ]]; then
     echo ""
-    echo "✅ Update complete! Please restart your shell or run the command again."
+    echo "✅ Update complete! Run 'maps-tools' to start."
   fi
 }
 
