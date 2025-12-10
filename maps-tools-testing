@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 #needs to increment on every change!!!
-#version: 57
+#version: 58
 
 # ============================================================================
 # Constants
@@ -337,6 +337,12 @@ function download_latest_script() {
   # Validate downloaded script
   [[ ! -s /tmp/maps-tools ]] && echo "❌ Downloaded script is empty" && rm -f /tmp/maps-tools && exit 1
   grep -q "#version:" /tmp/maps-tools || { echo "❌ Script corrupted (no version found)"; rm -f /tmp/maps-tools; exit 1; }
+  
+  # Extract and preserve the release channel from the downloaded script's URL
+  # This is important when script is run via curl pipe (bash <(curl ...))
+  if [[ -z "$RELEASE_CHANNEL" && "$source_url" =~ maps-tools-([^/]+)$ ]]; then
+    export RELEASE_CHANNEL="-${BASH_REMATCH[1]}"
+  fi
 }
 
 function install_script_to_system() {
