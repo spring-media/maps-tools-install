@@ -354,7 +354,11 @@ function check_docker_image_update() {
   [[ -z "$image_tag" ]] && image_tag="${DEFAULT_DOCKER_IMAGE_TAG}"
   local full_image="${DEFAULT_DOCKER_IMAGE}:${image_tag}"
   
-  echo "Checking for Docker image updates (channel: ${image_tag})..."
+  if [[ "$image_tag" == "${DEFAULT_DOCKER_IMAGE_TAG}" ]]; then
+    echo "Checking for Docker image updates..."
+  else
+    echo "Checking for Docker image updates (${image_tag})..."
+  fi
   
   # Get local image digest if it exists
   local local_digest=$(docker images --no-trunc --format "{{.ID}}" "${full_image}" 2>/dev/null | head -n1)
@@ -470,6 +474,16 @@ function backup_all_configs() {
 # ============================================================================
 # Main Script Logic
 # ============================================================================
+
+# Auto-detect release channel from script name if not already set
+if [[ -z "$RELEASE_CHANNEL" ]]; then
+  script_name="${0##*/}"
+  if [[ "$script_name" == "maps-tools-testing" ]]; then
+    RELEASE_CHANNEL="-testing"
+  elif [[ "$script_name" =~ ^maps-tools-(.+)$ ]]; then
+    RELEASE_CHANNEL="-${BASH_REMATCH[1]}"
+  fi
+fi
 
 # Handle version flag
 [[ "$1" == "--version" ]] && echo "maps-tools version: $(grep -m 1 "#version:" "$0" | awk '{print $2}')" && exit 0
