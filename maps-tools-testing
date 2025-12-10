@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 #needs to increment on every change!!!
-#version: 56
+#version: 57
 
 # ============================================================================
 # Constants
@@ -354,7 +354,7 @@ function check_docker_image_update() {
   [[ -z "$image_tag" ]] && image_tag="${DEFAULT_DOCKER_IMAGE_TAG}"
   local full_image="${DEFAULT_DOCKER_IMAGE}:${image_tag}"
   
-  echo "Checking for Docker image updates..."
+  echo "Checking for Docker image updates (channel: ${image_tag})..."
   
   # Get local image digest if it exists
   local local_digest=$(docker images --no-trunc --format "{{.ID}}" "${full_image}" 2>/dev/null | head -n1)
@@ -383,7 +383,7 @@ function check_docker_image_update() {
       docker pull "${full_image}"
       echo "✅ Docker image updated successfully"
     else
-      echo "Skipping image download. Run 'docker pull ${full_image}' to update later."
+      echo "Skipping image download. Run 'maps-tools -u' to update later."
     fi
     return 0
   else
