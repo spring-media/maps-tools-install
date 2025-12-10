@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 #needs to increment on every change!!!
-#version: 54
+#version: 58
 
 # ============================================================================
 # Constants
@@ -25,7 +25,7 @@ PERFORM_UPDATE=false
 PERFORM_CONFIG_CLEANUP=false
 USE_SESSION_KUBECONFIG=false
 ENABLE_K8S_DASHBOARD=false
-RELEASE_CHANNEL=
+RELEASE=
 CURRENT_USER=${HOME##*/}
 DOCKER_IS_RUNNING=false
 
@@ -88,7 +88,8 @@ DOCKER OPTIONS:
 
 FEATURES:
   -x              Enable Kubernetes dashboard (Octant) at http://0.0.0.0:7777/
-  -u [VERSION]    Check for updates and optionally install
+  -u [VERSION]    Check for script and Docker image updates, optionally install
+                  Checks both the maps-tools script and Docker image
                   Optional: -u testing (for testing release channel)
 
 EXAMPLES:
@@ -292,7 +293,10 @@ function validate_mutually_exclusive_options() {
 function run_container() {
   validate_mutually_exclusive_options
   
-  local selected_image="${DEFAULT_DOCKER_IMAGE}:${DEFAULT_DOCKER_IMAGE_TAG}"
+  # Determine image tag based on RELEASE_CHANNEL
+  local image_tag="${RELEASE_CHANNEL#-}"  # Remove leading dash from RELEASE_CHANNEL
+  [[ -z "$image_tag" ]] && image_tag="${DEFAULT_DOCKER_IMAGE_TAG}"
+  local selected_image="${DEFAULT_DOCKER_IMAGE}:${image_tag}"
 
   if [ "${INTERACTIVE_IMAGE_SELECTION}" = "true" ]; then
     available_images=$(docker images | grep "${DEFAULT_DOCKER_IMAGE_NAME}" | awk '{ print $1 ":" $2 }')
@@ -348,24 +352,81 @@ function install_script_to_system() {
     sudo chmod 755 /usr/local/bin/maps-tools
 }
 
+function check_docker_image_update() {
+  local image_tag="${RELEASE_CHANNEL#-}"
+  [[ -z "$image_tag" ]] && image_tag="${DEFAULT_DOCKER_IMAGE_TAG}"
+  local full_image="${DEFAULT_DOCKER_IMAGE}:${image_tag}"
+  
+  if [[ "$image_tag" == "${DEFAULT_DOCKER_IMAGE_TAG}" ]]; then
+    echo "Checking for Docker image updates..."
+  else
+    echo "Checking for Docker image updates (${image_tag})..."
+  fi
+  
+  # Get local image digest if it exists
+  local local_digest=$(docker images --no-trunc --format "{{.ID}}" "${full_image}" 2>/dev/null | head -n1)
+  
+  if [[ -z "$local_digest" ]]; then
+    echo "No local Docker image found. Pulling ${full_image}..."
+    docker pull "${full_image}"
+    return 0
+  fi
+  
+  # Get remote manifest digest without pulling the full image
+  echo "Checking remote registry for updates..."
+  local remote_digest=$(docker manifest inspect "${full_image}" 2>/dev/null | grep -m1 '"digest":' | sed 's/.*"sha256:\([^"]*\)".*/sha256:\1/')
+  
+  if [[ -z "$remote_digest" ]]; then
+    echo "⚠️  Unable to check for Docker image updates (network or registry issue)"
+    return 1
+  fi
+  
+  # Compare digests
+  if [[ "$local_digest" != "$remote_digest" ]]; then
+    echo "🔄 New Docker image available: ${full_image}"
+    read -p "Do you want to download the new image? (y/n) " response
+    if [[ "$response" == "y" || "$response" == "Y" ]]; then
+      echo "Downloading new image..."
+      docker pull "${full_image}"
+      echo "✅ Docker image updated successfully"
+    else
+      echo "Skipping image download. Run 'maps-tools -u' to update later."
+    fi
+    return 0
+  else
+    echo "✅ Docker image is up to date: ${full_image}"
+    return 0
+  fi
+}
+
 function check_and_prompt_for_updates() {
   download_latest_script
   
   local installed_version=$(grep -m 1 "#version:" /usr/local/bin/maps-tools 2>/dev/null | awk '{print $2}')
   local available_version=$(grep -m 1 "#version:" /tmp/maps-tools | awk '{print $2}')
+  local script_updated=false
   
   if [[ -n "$installed_version" && -n "$available_version" && "$installed_version" -lt "$available_version" ]]; then
     read -p "New version available ($installed_version → $available_version). Update? (y/n) " response
     if [[ "$response" == "y" ]]; then
       echo "Upgrading to version ${available_version}"
       install_script_to_system
-      pull_docker_image
+      script_updated=true
     fi
   else
-    echo "maps-tools is up to date (v${installed_version})"
+    echo "maps-tools script is up to date (v${installed_version})"
   fi
   
   rm -f /tmp/maps-tools
+  
+  # Always check for Docker image updates when -u is called
+  echo ""
+  check_docker_image_update
+  
+  if [[ "$script_updated" == true ]]; then
+    echo ""
+    echo "✅ Update complete! Please restart your shell or run the command again."
+  fi
 }
 
 function pull_docker_image() {
@@ -416,6 +477,9 @@ function backup_all_configs() {
 # ============================================================================
 # Main Script Logic
 # ============================================================================
+
+# Use embedded RELEASE variable (set by release process) or allow CLI override
+RELEASE_CHANNEL="${RELEASE:+-$RELEASE}"
 
 # Handle version flag
 [[ "$1" == "--version" ]] && echo "maps-tools version: $(grep -m 1 "#version:" "$0" | awk '{print $2}')" && exit 0
