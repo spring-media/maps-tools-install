@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 #needs to increment on every change!!!
-#version: 60
+#version: 61
 
 # ============================================================================
 # Constants
@@ -40,6 +40,87 @@ declare -a OIDC_LISTEN_ADDRESSES
 function is_port_available() {
   local port="$1"
   ! nc -z 127.0.0.1 "${port}" -w2 2>/dev/null
+}
+
+# ============================================================================
+# Browser Listener (opens OIDC login URLs on the host)
+# ============================================================================
+
+BROWSER_LISTENER_PORT=19000
+BROWSER_LISTENER_TOKEN_FILE="${HOME}/.maps-tools/browser-listener.token"
+BROWSER_LISTENER_PID_FILE="${HOME}/.maps-tools/browser-listener.pid"
+MAPS_TOOLS_BROWSER_TOKEN=""
+
+function ensure_browser_listener() {
+  # Only run on macOS (uses `open` to launch browser)
+  [[ "$(uname)" != "Darwin" ]] && return 0
+
+  # Ensure ~/.maps-tools dir exists
+  mkdir -p "${HOME}/.maps-tools"
+
+  # Check if listener is already running on port 19000
+  if ! is_port_available "${BROWSER_LISTENER_PORT}"; then
+    # Already running — read existing token
+    if [ -f "${BROWSER_LISTENER_TOKEN_FILE}" ]; then
+      MAPS_TOOLS_BROWSER_TOKEN="$(cat "${BROWSER_LISTENER_TOKEN_FILE}")"
+      return 0
+    fi
+  fi
+
+  # Generate new token
+  MAPS_TOOLS_BROWSER_TOKEN="$(/usr/bin/python3 -c "import secrets; print(secrets.token_hex(32))")"
+  echo "${MAPS_TOOLS_BROWSER_TOKEN}" > "${BROWSER_LISTENER_TOKEN_FILE}"
+  chmod 600 "${BROWSER_LISTENER_TOKEN_FILE}"
+
+  # Start inline Python listener — no external script file needed.
+  # Wrapped in a subshell so the heredoc works correctly with backgrounding.
+  local _token="${MAPS_TOOLS_BROWSER_TOKEN}"
+  local _port="${BROWSER_LISTENER_PORT}"
+  local _log="${HOME}/.maps-tools/browser-listener.log"
+  ( /usr/bin/python3 - "${_token}" "${_port}" >"${_log}" 2>&1 <<'BROWSER_LISTENER_PYTHON'
+import http.server
+import subprocess
+import sys
+import urllib.parse
+from datetime import datetime
+
+token = sys.argv[1]
+port  = int(sys.argv[2])
+
+def log(msg):
+    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] [maps-tools] {msg}", flush=True)
+
+class BrowserHandler(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        parsed = urllib.parse.urlparse(self.path)
+        params = urllib.parse.parse_qs(parsed.query)
+        if params.get("token", [""])[0] != token:
+            log("Rejected request with invalid token")
+            self.send_response(403)
+            self.end_headers()
+            self.wfile.write(b"Forbidden\n")
+            return
+        urls = params.get("url", [])
+        if not urls:
+            self.send_response(400)
+            self.end_headers()
+            self.wfile.write(b"Missing url parameter\n")
+            return
+        log(f"Opening in browser: {urls[0]}")
+        subprocess.Popen(["open", urls[0]])
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"OK\n")
+    def log_message(self, *a):
+        pass
+
+log(f"Browser listener ready on port {port}")
+http.server.HTTPServer(("127.0.0.1", port), BrowserHandler).serve_forever()
+BROWSER_LISTENER_PYTHON
+  ) &
+  echo $! > "${BROWSER_LISTENER_PID_FILE}"
+
+  echo "Host browser listener started on port ${BROWSER_LISTENER_PORT}"
 }
 
 # ============================================================================
@@ -280,6 +361,12 @@ function add_environment_vars() {
     DOCKER_CMD+=("-e" "OCTANT_LISTENER_ADDR=0.0.0.0:7777")
     DOCKER_CMD+=("-p" "7777:7777")
   fi
+
+  # Browser listener for OIDC login URL auto-open
+  if [ -n "${MAPS_TOOLS_BROWSER_TOKEN}" ]; then
+    DOCKER_CMD+=("-e" "MAPS_TOOLS_BROWSER_PORT=${BROWSER_LISTENER_PORT}")
+    DOCKER_CMD+=("-e" "MAPS_TOOLS_BROWSER_TOKEN=${MAPS_TOOLS_BROWSER_TOKEN}")
+  fi
 }
 
 # Build complete Docker command based on operation mode
@@ -316,6 +403,8 @@ function build_docker_command() {
       # in the container restore the last used profile from awsctx.profile.current.
       [ -n "${AWS_PROFILE_STAGE}" ] && DOCKER_CMD+=("-e" "AWS_PROFILE=$AWS_PROFILE_STAGE")
       DOCKER_CMD+=("-e" "DEFAULT_SESSION_KUBECONFIG=$USE_SESSION_KUBECONFIG")
+      DOCKER_CMD+=("-e" "MAPS_TOOLS_DAEMON_ATTACH=true")
+      [ -n "${MAPS_TOOLS_BROWSER_TOKEN}" ] && DOCKER_CMD+=("-e" "MAPS_TOOLS_BROWSER_PORT=${BROWSER_LISTENER_PORT}" "-e" "MAPS_TOOLS_BROWSER_TOKEN=${MAPS_TOOLS_BROWSER_TOKEN}")
       container_start_path="$PWD"
       if echo "$container_start_path" | grep -q "$HOME"; then
         container_start_path=$(echo "$container_start_path" | sed "s|Users|home|")
@@ -332,6 +421,8 @@ function build_docker_command() {
       # in the container restore the last used profile from awsctx.profile.current.
       [ -n "${AWS_PROFILE_STAGE}" ] && DOCKER_CMD+=("-e" "AWS_PROFILE=$AWS_PROFILE_STAGE")
       DOCKER_CMD+=("-e" "DEFAULT_SESSION_KUBECONFIG=$USE_SESSION_KUBECONFIG")
+      DOCKER_CMD+=("-e" "MAPS_TOOLS_DAEMON_ATTACH=true")
+      [ -n "${MAPS_TOOLS_BROWSER_TOKEN}" ] && DOCKER_CMD+=("-e" "MAPS_TOOLS_BROWSER_PORT=${BROWSER_LISTENER_PORT}" "-e" "MAPS_TOOLS_BROWSER_TOKEN=${MAPS_TOOLS_BROWSER_TOKEN}")
       container_start_path="$PWD"
       if echo "$container_start_path" | grep -q "$HOME"; then
         container_start_path=$(echo "$container_start_path" | sed "s|Users|home|")
@@ -361,6 +452,7 @@ function build_docker_command() {
     # in the container restore the last used profile from awsctx.profile.current.
     [ -n "${AWS_PROFILE_STAGE}" ] && DOCKER_CMD+=("-e" "AWS_PROFILE=$AWS_PROFILE_STAGE")
     DOCKER_CMD+=("-e" "DEFAULT_SESSION_KUBECONFIG=$USE_SESSION_KUBECONFIG")
+    [ -n "${MAPS_TOOLS_BROWSER_TOKEN}" ] && DOCKER_CMD+=("-e" "MAPS_TOOLS_BROWSER_PORT=${BROWSER_LISTENER_PORT}" "-e" "MAPS_TOOLS_BROWSER_TOKEN=${MAPS_TOOLS_BROWSER_TOKEN}")
     container_start_path="$PWD"
     if echo "$container_start_path" | grep -q "$HOME"; then
       container_start_path=$(echo "$container_start_path" | sed "s|Users|home|")
@@ -409,6 +501,7 @@ function validate_oidc_callback_options() {
 function run_container() {
   validate_mutually_exclusive_options
   validate_oidc_callback_options
+  ensure_browser_listener
   
   # Determine image tag based on RELEASE_CHANNEL
   local image_tag="${RELEASE_CHANNEL#-}"  # Remove leading dash from RELEASE_CHANNEL
