@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 #needs to increment on every change!!!
-#version: 58
+#version: 60
 
 # ============================================================================
 # Constants
@@ -28,21 +28,108 @@ ENABLE_K8S_DASHBOARD=false
 RELEASE=
 CURRENT_USER=${HOME##*/}
 DOCKER_IS_RUNNING=false
+OIDC_CALLBACK_PORT_CANDIDATES="${MAPS_TOOLS_OIDC_CALLBACK_PORTS:-}"
+OIDC_CALLBACK_PORT_OVERRIDE_SET=false
+DEV_MODE=false
 
 declare -a EXTRA_DOCKER_ARGS
 declare -a AVAILABLE_PORTS
+declare -a OIDC_CALLBACK_PORTS
+declare -a OIDC_LISTEN_ADDRESSES
+
+function is_port_available() {
+  local port="$1"
+  ! nc -z 127.0.0.1 "${port}" -w2 2>/dev/null
+}
+
+# ============================================================================
+# Browser Listener (opens OIDC login URLs on the host)
+# ============================================================================
+
+BROWSER_LISTENER_PORT=19000
+BROWSER_LISTENER_TOKEN_FILE="${HOME}/.maps-tools/browser-listener.token"
+BROWSER_LISTENER_PID_FILE="${HOME}/.maps-tools/browser-listener.pid"
+MAPS_TOOLS_BROWSER_TOKEN=""
+
+function ensure_browser_listener() {
+  # Only run on macOS (uses `open` to launch browser)
+  [[ "$(uname)" != "Darwin" ]] && return 0
+
+  # Ensure ~/.maps-tools dir exists
+  mkdir -p "${HOME}/.maps-tools"
+
+  # Check if listener is already running on port 19000
+  if ! is_port_available "${BROWSER_LISTENER_PORT}"; then
+    # Already running — read existing token
+    if [ -f "${BROWSER_LISTENER_TOKEN_FILE}" ]; then
+      MAPS_TOOLS_BROWSER_TOKEN="$(cat "${BROWSER_LISTENER_TOKEN_FILE}")"
+      return 0
+    fi
+  fi
+
+  # Generate new token
+  MAPS_TOOLS_BROWSER_TOKEN="$(/usr/bin/python3 -c "import secrets; print(secrets.token_hex(32))")"
+  echo "${MAPS_TOOLS_BROWSER_TOKEN}" > "${BROWSER_LISTENER_TOKEN_FILE}"
+  chmod 600 "${BROWSER_LISTENER_TOKEN_FILE}"
+
+  # Start inline Python listener — no external script file needed.
+  # Wrapped in a subshell so the heredoc works correctly with backgrounding.
+  local _token="${MAPS_TOOLS_BROWSER_TOKEN}"
+  local _port="${BROWSER_LISTENER_PORT}"
+  local _log="${HOME}/.maps-tools/browser-listener.log"
+  ( /usr/bin/python3 - "${_token}" "${_port}" >"${_log}" 2>&1 <<'BROWSER_LISTENER_PYTHON'
+import http.server
+import subprocess
+import sys
+import urllib.parse
+from datetime import datetime
+
+token = sys.argv[1]
+port  = int(sys.argv[2])
+
+def log(msg):
+    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] [maps-tools] {msg}", flush=True)
+
+class BrowserHandler(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        parsed = urllib.parse.urlparse(self.path)
+        params = urllib.parse.parse_qs(parsed.query)
+        if params.get("token", [""])[0] != token:
+            log("Rejected request with invalid token")
+            self.send_response(403)
+            self.end_headers()
+            self.wfile.write(b"Forbidden\n")
+            return
+        urls = params.get("url", [])
+        if not urls:
+            self.send_response(400)
+            self.end_headers()
+            self.wfile.write(b"Missing url parameter\n")
+            return
+        log(f"Opening in browser: {urls[0]}")
+        subprocess.Popen(["open", urls[0]])
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"OK\n")
+    def log_message(self, *a):
+        pass
+
+log(f"Browser listener ready on port {port}")
+http.server.HTTPServer(("127.0.0.1", port), BrowserHandler).serve_forever()
+BROWSER_LISTENER_PYTHON
+  ) &
+  echo $! > "${BROWSER_LISTENER_PID_FILE}"
+
+  echo "Host browser listener started on port ${BROWSER_LISTENER_PORT}"
+}
 
 # ============================================================================
 # Initialization
 # ============================================================================
 
-# Ensure required directories and files exist
-[ ! -f "$HOME/.terraformrc" ] && touch "$HOME/.terraformrc"
-[ ! -d "$HOME/.spacelift" ] && mkdir -p "$HOME/.spacelift"
-
 # Find 5 available ports in range 8000-8999
 for port in {8000..8999}; do
-  nc -z 127.0.0.1 "${port}" -w2 2>/dev/null && continue
+  is_port_available "${port}" || continue
   AVAILABLE_PORTS+=("${port}")
   [ "${#AVAILABLE_PORTS[@]}" -eq 5 ] && break
   [ "${port}" -eq 8999 ] && echo "All local ports 8000-8999 are in use" && exit 1
@@ -63,6 +150,7 @@ USAGE:
 COMMON OPTIONS:
   -h              Show this help message and exit
   --version       Print version number and exit
+  --dev           Run from the current checkout without installing to /usr/local/bin
 
 ENVIRONMENT OPTIONS:
   -e PROFILE      Set AWS profile/environment (e.g., mediasites-stage.dev)
@@ -85,6 +173,9 @@ DOCKER OPTIONS:
   -i              Interactively select from locally available Docker images
   -o "ARGS"       Pass additional arguments to docker run/create
                   Can be used multiple times. Example: -o "-p 8080:8080"
+  -O "PORTS"      Set OIDC callback port candidates for Azure login
+                  Default: "18000 8000". Custom ports must be registered
+                  as Azure redirect URIs, e.g. http://localhost:18001
 
 FEATURES:
   -x              Enable Kubernetes dashboard (Octant) at http://0.0.0.0:7777/
@@ -95,6 +186,9 @@ FEATURES:
 EXAMPLES:
   # Run standard interactive container
   $0
+
+  # Run directly from a development checkout
+  $0 --dev -i
 
   # Run with specific AWS profile
   $0 -e mediasites-prod.admin
@@ -111,13 +205,17 @@ EXAMPLES:
   # Expose additional port and set environment variable
   $0 -o "-p 9090:9090" -o "-e MY_VAR=value"
 
+  # Use a custom Azure OIDC callback port candidate
+  $0 -O "18001 18000 8000"
+
   # Check for updates
   $0 -u
 
 NOTES:
   - Daemon mode (-d) and attach mode (-a) are mutually exclusive
   - The container automatically mounts your home directory and configs
-  - Five random ports (8000-8999) are automatically exposed
+  - The first five available ports in 8000-8999 are automatically exposed
+  - OIDC callback ports are mapped separately and must be allowed in Azure
   - Use -v to prevent mounting configs for a clean environment
 
 For more information, visit: https://github.com/spring-media/maps-tools
@@ -138,16 +236,88 @@ function get_container_state() {
   fi
 }
 
+function array_contains() {
+  local needle="$1"
+  shift
+  local item
+  for item in "$@"; do
+    [[ "$item" == "$needle" ]] && return 0
+  done
+  return 1
+}
+
+
+function resolve_oidc_callback_ports() {
+  OIDC_CALLBACK_PORTS=()
+  OIDC_LISTEN_ADDRESSES=()
+
+  if [ -n "${OIDC_CALLBACK_PORT_CANDIDATES}" ]; then
+    # Manual override via -O or MAPS_TOOLS_OIDC_CALLBACK_PORTS: validate and use as-is
+    local normalized_candidates="${OIDC_CALLBACK_PORT_CANDIDATES//,/ }"
+    local port
+    for port in ${normalized_candidates}; do
+      if [[ ! "$port" =~ ^[0-9]+$ ]] || [ "$port" -lt 1024 ] || [ "$port" -gt 65535 ]; then
+        echo "❌ Invalid OIDC callback port: ${port}"
+        echo "   Use an unprivileged TCP port in the range 1024-65535."
+        exit 1
+      fi
+
+      array_contains "$port" "${OIDC_CALLBACK_PORTS[@]}" && continue
+
+      if array_contains "$port" "${AVAILABLE_PORTS[@]}" || is_port_available "$port"; then
+        OIDC_CALLBACK_PORTS+=("$port")
+        OIDC_LISTEN_ADDRESSES+=("0.0.0.0:${port}")
+      fi
+    done
+
+    if [ "${#OIDC_CALLBACK_PORTS[@]}" -eq 0 ]; then
+      echo "❌ No configured OIDC callback port is available."
+      echo "   Free one of these ports or provide registered alternatives with -O:"
+      echo "   ${OIDC_CALLBACK_PORT_CANDIDATES}"
+      echo "   Custom ports must be registered as Azure redirect URIs."
+      exit 1
+    fi
+  else
+    # Auto-discovery: find first free port in range 18000-18100
+    local port
+    for port in {18000..18100}; do
+      if is_port_available "$port"; then
+        OIDC_CALLBACK_PORTS+=("$port")
+        OIDC_LISTEN_ADDRESSES+=("0.0.0.0:${port}")
+        break
+      fi
+    done
+
+    if [ "${#OIDC_CALLBACK_PORTS[@]}" -eq 0 ]; then
+      echo "❌ No free OIDC callback port found in range 18000-18100."
+      echo "   Free a port in that range or specify one explicitly with -O."
+      echo "   Custom ports must be registered as Azure redirect URIs."
+      exit 1
+    fi
+  fi
+}
+
 # Add volume mounts to docker command array
 function add_volume_mounts() {
   DOCKER_CMD+=("-v" "$HOME:/home/$CURRENT_USER")
   
   if [ "${MOUNT_AWS_CONFIGS}" = "true" ]; then
+    # Ensure required mount sources exist before Docker tries to bind them.
+    # Docker Desktop may otherwise attempt to create them and fail with permission errors.
+    [ ! -d "$HOME/.aws" ] && mkdir -p "$HOME/.aws"
+    [ ! -d "$HOME/.ssh" ] && mkdir -m 700 "$HOME/.ssh"
+    [ ! -d "$HOME/.helm" ] && mkdir -p "$HOME/.helm"
+    [ ! -d "$HOME/.kube" ] && mkdir -p "$HOME/.kube"
+    [ ! -d "$HOME/.spacelift" ] && mkdir -p "$HOME/.spacelift"
+    [ ! -d "$HOME/.maps-tools" ] && mkdir -p "$HOME/.maps-tools"
+    [ ! -f "$HOME/.terraformrc" ] && touch "$HOME/.terraformrc"
+
     DOCKER_CMD+=("-v" "$HOME/.aws:/home/$DEFAULT_DOCKER_USERNAME/.aws")
     DOCKER_CMD+=("-v" "$HOME/.ssh:/home/$DEFAULT_DOCKER_USERNAME/.ssh")
     DOCKER_CMD+=("-v" "$HOME/.helm:/home/$DEFAULT_DOCKER_USERNAME/.helm")
     DOCKER_CMD+=("-v" "$HOME/.kube:/home/$DEFAULT_DOCKER_USERNAME/.kube")
     DOCKER_CMD+=("-v" "$HOME/.spacelift:/home/$DEFAULT_DOCKER_USERNAME/.spacelift")
+    DOCKER_CMD+=("-v" "$HOME/.maps-tools:/home/$DEFAULT_DOCKER_USERNAME/.maps-tools")
     DOCKER_CMD+=("-v" "$HOME/.terraformrc:/home/$DEFAULT_DOCKER_USERNAME/.terraformrc")
   fi
 }
@@ -155,7 +325,13 @@ function add_volume_mounts() {
 # Add port mappings to docker command array
 function add_port_mappings() {
   for port in ${AVAILABLE_PORTS[@]}; do
-    DOCKER_CMD+=("-p" "${port}:${port}")
+    if ! array_contains "$port" "${OIDC_CALLBACK_PORTS[@]}"; then
+      DOCKER_CMD+=("-p" "${port}:${port}")
+    fi
+  done
+
+  for port in ${OIDC_CALLBACK_PORTS[@]}; do
+    DOCKER_CMD+=("-p" "127.0.0.1:${port}:${port}")
   done
 }
 
@@ -172,6 +348,10 @@ function add_environment_vars() {
   DOCKER_CMD+=("-e" "DEFAULT_SESSION_KUBECONFIG=$USE_SESSION_KUBECONFIG")
   DOCKER_CMD+=("-e" "START_PATH=$container_start_path")
   DOCKER_CMD+=("-e" "K8S_DASHBOARD=$ENABLE_K8S_DASHBOARD")
+
+  if [ ${#OIDC_LISTEN_ADDRESSES[@]} -gt 0 ]; then
+    DOCKER_CMD+=("-e" "OIDC_LOGIN_LISTEN_ADDRESSES=${OIDC_LISTEN_ADDRESSES[*]}")
+  fi
   
   if [ ${#AVAILABLE_PORTS[@]} -gt 0 ]; then
     DOCKER_CMD+=("-e" "PORT_VARIABLE=${AVAILABLE_PORTS[*]}")
@@ -180,6 +360,12 @@ function add_environment_vars() {
   if [ "${ENABLE_K8S_DASHBOARD}" = "true" ]; then
     DOCKER_CMD+=("-e" "OCTANT_LISTENER_ADDR=0.0.0.0:7777")
     DOCKER_CMD+=("-p" "7777:7777")
+  fi
+
+  # Browser listener for OIDC login URL auto-open
+  if [ -n "${MAPS_TOOLS_BROWSER_TOKEN}" ]; then
+    DOCKER_CMD+=("-e" "MAPS_TOOLS_BROWSER_PORT=${BROWSER_LISTENER_PORT}")
+    DOCKER_CMD+=("-e" "MAPS_TOOLS_BROWSER_TOKEN=${MAPS_TOOLS_BROWSER_TOKEN}")
   fi
 }
 
@@ -202,6 +388,7 @@ function build_docker_command() {
     if [ "$container_state" != "none" ]; then
       docker rm -f maps-tools >/dev/null 2>&1
     fi
+    resolve_oidc_callback_ports
     DOCKER_CMD=(docker create --name maps-tools)
     add_volume_mounts
     add_port_mappings
@@ -212,8 +399,12 @@ function build_docker_command() {
   elif [ "${ATTACH_TO_DAEMON}" = "true" ]; then
     if [ "$container_state" = "running" ]; then
       DOCKER_CMD=(docker exec -ti)
-      DOCKER_CMD+=("-e" "AWS_PROFILE=$AWS_PROFILE_STAGE")
+      # Only pass AWS_PROFILE if explicitly set — otherwise let bash_profile_aws
+      # in the container restore the last used profile from awsctx.profile.current.
+      [ -n "${AWS_PROFILE_STAGE}" ] && DOCKER_CMD+=("-e" "AWS_PROFILE=$AWS_PROFILE_STAGE")
       DOCKER_CMD+=("-e" "DEFAULT_SESSION_KUBECONFIG=$USE_SESSION_KUBECONFIG")
+      DOCKER_CMD+=("-e" "MAPS_TOOLS_DAEMON_ATTACH=true")
+      [ -n "${MAPS_TOOLS_BROWSER_TOKEN}" ] && DOCKER_CMD+=("-e" "MAPS_TOOLS_BROWSER_PORT=${BROWSER_LISTENER_PORT}" "-e" "MAPS_TOOLS_BROWSER_TOKEN=${MAPS_TOOLS_BROWSER_TOKEN}")
       container_start_path="$PWD"
       if echo "$container_start_path" | grep -q "$HOME"; then
         container_start_path=$(echo "$container_start_path" | sed "s|Users|home|")
@@ -226,8 +417,12 @@ function build_docker_command() {
     elif [ "$container_state" = "stopped" ]; then
       docker start maps-tools
       DOCKER_CMD=(docker exec -ti)
-      DOCKER_CMD+=("-e" "AWS_PROFILE=$AWS_PROFILE_STAGE")
+      # Only pass AWS_PROFILE if explicitly set — otherwise let bash_profile_aws
+      # in the container restore the last used profile from awsctx.profile.current.
+      [ -n "${AWS_PROFILE_STAGE}" ] && DOCKER_CMD+=("-e" "AWS_PROFILE=$AWS_PROFILE_STAGE")
       DOCKER_CMD+=("-e" "DEFAULT_SESSION_KUBECONFIG=$USE_SESSION_KUBECONFIG")
+      DOCKER_CMD+=("-e" "MAPS_TOOLS_DAEMON_ATTACH=true")
+      [ -n "${MAPS_TOOLS_BROWSER_TOKEN}" ] && DOCKER_CMD+=("-e" "MAPS_TOOLS_BROWSER_PORT=${BROWSER_LISTENER_PORT}" "-e" "MAPS_TOOLS_BROWSER_TOKEN=${MAPS_TOOLS_BROWSER_TOKEN}")
       container_start_path="$PWD"
       if echo "$container_start_path" | grep -q "$HOME"; then
         container_start_path=$(echo "$container_start_path" | sed "s|Users|home|")
@@ -253,8 +448,11 @@ function build_docker_command() {
     fi
     
     DOCKER_CMD=(docker exec -t)
-    DOCKER_CMD+=("-e" "AWS_PROFILE=$AWS_PROFILE_STAGE")
+    # Only pass AWS_PROFILE if explicitly set — otherwise let bash_profile_aws
+    # in the container restore the last used profile from awsctx.profile.current.
+    [ -n "${AWS_PROFILE_STAGE}" ] && DOCKER_CMD+=("-e" "AWS_PROFILE=$AWS_PROFILE_STAGE")
     DOCKER_CMD+=("-e" "DEFAULT_SESSION_KUBECONFIG=$USE_SESSION_KUBECONFIG")
+    [ -n "${MAPS_TOOLS_BROWSER_TOKEN}" ] && DOCKER_CMD+=("-e" "MAPS_TOOLS_BROWSER_PORT=${BROWSER_LISTENER_PORT}" "-e" "MAPS_TOOLS_BROWSER_TOKEN=${MAPS_TOOLS_BROWSER_TOKEN}")
     container_start_path="$PWD"
     if echo "$container_start_path" | grep -q "$HOME"; then
       container_start_path=$(echo "$container_start_path" | sed "s|Users|home|")
@@ -268,6 +466,7 @@ function build_docker_command() {
     
   else
     # Standard interactive container run
+    resolve_oidc_callback_ports
     DOCKER_CMD=(docker run -it --rm)
     add_volume_mounts
     add_port_mappings
@@ -290,8 +489,19 @@ function validate_mutually_exclusive_options() {
   fi
 }
 
+function validate_oidc_callback_options() {
+  if [[ "${OIDC_CALLBACK_PORT_OVERRIDE_SET}" == true ]] && \
+     { [[ "${ATTACH_TO_DAEMON}" == true ]] || [[ "${EXEC_IN_DAEMON}" == true ]]; }; then
+    echo "❌ -O only applies when creating a new maps-tools container."
+    echo "   Recreate the daemon container with -d -O \"${OIDC_CALLBACK_PORTS[*]}\" to change OIDC callback ports."
+    exit 1
+  fi
+}
+
 function run_container() {
   validate_mutually_exclusive_options
+  validate_oidc_callback_options
+  ensure_browser_listener
   
   # Determine image tag based on RELEASE_CHANNEL
   local image_tag="${RELEASE_CHANNEL#-}"  # Remove leading dash from RELEASE_CHANNEL
@@ -299,7 +509,10 @@ function run_container() {
   local selected_image="${DEFAULT_DOCKER_IMAGE}:${image_tag}"
 
   if [ "${INTERACTIVE_IMAGE_SELECTION}" = "true" ]; then
-    available_images=$(docker images | grep "${DEFAULT_DOCKER_IMAGE_NAME}" | awk '{ print $1 ":" $2 }')
+    available_images=$(docker images --format '{{.Repository}}:{{.Tag}}' \
+      | grep -E "(^|/)${DEFAULT_DOCKER_IMAGE_NAME}:" \
+      | grep -v ':<none>$' \
+      | sort -u || true)
     
     if [ -z "$available_images" ]; then
       echo "❌ No local images found. Run 'make build' or pull from registry"
@@ -515,11 +728,25 @@ function backup_all_configs() {
 # Use embedded RELEASE variable (set by release process) or allow CLI override
 RELEASE_CHANNEL="${RELEASE:+-$RELEASE}"
 
+# Handle development mode before getopts, because getopts does not parse long options
+ARGS=()
+for arg in "$@"; do
+  case "$arg" in
+    --dev)
+      DEV_MODE=true
+      ;;
+    *)
+      ARGS+=("$arg")
+      ;;
+  esac
+done
+set -- "${ARGS[@]}"
+
 # Handle version flag
 [[ "$1" == "--version" ]] && echo "maps-tools version: $(grep -m 1 "#version:" "$0" | awk '{print $2}')" && exit 0
 
 # Parse command line options
-while getopts "b:o:he:ivdaucsxE" arg; do
+while getopts "b:o:O:he:ivdaucsxE" arg; do
   case "${arg}" in
     b) echo "🛠️  TODO: Build args not yet implemented" ;;
     e) AWS_PROFILE_STAGE="${OPTARG}" ;;
@@ -536,6 +763,10 @@ while getopts "b:o:he:ivdaucsxE" arg; do
       PERFORM_UPDATE=true
       ;;
     o) EXTRA_DOCKER_ARGS+=("$OPTARG") ;;
+    O)
+      OIDC_CALLBACK_PORT_CANDIDATES="${OPTARG}"
+      OIDC_CALLBACK_PORT_OVERRIDE_SET=true
+      ;;
     x) ENABLE_K8S_DASHBOARD=true ;;
     h|?|*) print_usage ;;
   esac
@@ -543,7 +774,7 @@ done
 shift $((OPTIND - 1))
 
 # Handle initial installation
-if [[ ! -x /usr/local/bin/maps-tools ]]; then
+if [[ "${DEV_MODE}" != true && ! -x /usr/local/bin/maps-tools ]]; then
   echo "Installing maps-tools to /usr/local/bin"
   download_latest_script
   install_script_to_system
