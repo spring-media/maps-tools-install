@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 #needs to increment on every change!!!
-#version: 60
+#version: 61
 
 # ============================================================================
 # Constants
@@ -24,13 +24,16 @@ EXEC_IN_DAEMON=false
 PERFORM_UPDATE=false
 PERFORM_CONFIG_CLEANUP=false
 USE_SESSION_KUBECONFIG=false
-ENABLE_K8S_DASHBOARD=false
 RELEASE=testing
 CURRENT_USER=${HOME##*/}
 DOCKER_IS_RUNNING=false
 OIDC_CALLBACK_PORT_CANDIDATES="${MAPS_TOOLS_OIDC_CALLBACK_PORTS:-}"
 OIDC_CALLBACK_PORT_OVERRIDE_SET=false
 DEV_MODE=false
+# --dry-run: print the docker command instead of running it (no side effects)
+DRY_RUN=false
+# Interactive shell inside the container: zsh (default) or bash (--bash)
+CONTAINER_SHELL="${MAPS_TOOLS_SHELL:-zsh}"
 
 declare -a EXTRA_DOCKER_ARGS
 declare -a AVAILABLE_PORTS
@@ -151,6 +154,10 @@ COMMON OPTIONS:
   -h              Show this help message and exit
   --version       Print version number and exit
   --dev           Run from the current checkout without installing to /usr/local/bin
+  --dry-run       Only print the docker command that would be executed
+                  (does not start, stop or remove containers)
+  --bash          Use bash instead of zsh (default) as shell inside the container
+                  Alternatively set MAPS_TOOLS_SHELL=bash
 
 ENVIRONMENT OPTIONS:
   -e PROFILE      Set AWS profile/environment (e.g., mediasites-stage.dev)
@@ -178,7 +185,6 @@ DOCKER OPTIONS:
                   as Azure redirect URIs, e.g. http://localhost:18001
 
 FEATURES:
-  -x              Enable Kubernetes dashboard (Octant) at http://0.0.0.0:7777/
   -u [VERSION]    Check for script and Docker image updates, optionally install
                   Checks both the maps-tools script and Docker image
                   Optional: -u testing (for testing release channel)
@@ -186,6 +192,9 @@ FEATURES:
 EXAMPLES:
   # Run standard interactive container
   $0
+
+  # Use bash instead of the default zsh
+  $0 --bash
 
   # Run directly from a development checkout
   $0 --dev -i
@@ -198,9 +207,6 @@ EXAMPLES:
 
   # Attach to running daemon
   $0 -a
-
-  # Run with Kubernetes dashboard
-  $0 -x
 
   # Expose additional port and set environment variable
   $0 -o "-p 9090:9090" -o "-e MY_VAR=value"
@@ -347,7 +353,7 @@ function add_environment_vars() {
   DOCKER_CMD+=("-e" "AWS_PROFILE=$AWS_PROFILE_STAGE")
   DOCKER_CMD+=("-e" "DEFAULT_SESSION_KUBECONFIG=$USE_SESSION_KUBECONFIG")
   DOCKER_CMD+=("-e" "START_PATH=$container_start_path")
-  DOCKER_CMD+=("-e" "K8S_DASHBOARD=$ENABLE_K8S_DASHBOARD")
+  DOCKER_CMD+=("-e" "MAPS_TOOLS_SHELL=$CONTAINER_SHELL")
 
   if [ ${#OIDC_LISTEN_ADDRESSES[@]} -gt 0 ]; then
     DOCKER_CMD+=("-e" "OIDC_LOGIN_LISTEN_ADDRESSES=${OIDC_LISTEN_ADDRESSES[*]}")
@@ -357,15 +363,25 @@ function add_environment_vars() {
     DOCKER_CMD+=("-e" "PORT_VARIABLE=${AVAILABLE_PORTS[*]}")
   fi
   
-  if [ "${ENABLE_K8S_DASHBOARD}" = "true" ]; then
-    DOCKER_CMD+=("-e" "OCTANT_LISTENER_ADDR=0.0.0.0:7777")
-    DOCKER_CMD+=("-p" "7777:7777")
-  fi
 
   # Browser listener for OIDC login URL auto-open
   if [ -n "${MAPS_TOOLS_BROWSER_TOKEN}" ]; then
     DOCKER_CMD+=("-e" "MAPS_TOOLS_BROWSER_PORT=${BROWSER_LISTENER_PORT}")
     DOCKER_CMD+=("-e" "MAPS_TOOLS_BROWSER_TOKEN=${MAPS_TOOLS_BROWSER_TOKEN}")
+  fi
+}
+
+# Shell commands used for docker exec (-a / -E). zsh loads the profiles via
+# ~/.zshrc (-i), bash via ~/.bash_profile (--login). Daemon containers created
+# from an older image without zsh fall back to bash.
+function set_container_shell_commands() {
+  if [ "${CONTAINER_SHELL}" = "bash" ]; then
+    CONTAINER_INTERACTIVE_SHELL_CMD=(/usr/bin/bash --login)
+    CONTAINER_EXEC_SHELL_CMD=(/usr/bin/bash --login -c)
+  else
+    CONTAINER_INTERACTIVE_SHELL_CMD=(/bin/sh -c 'if command -v zsh >/dev/null 2>&1; then exec zsh -i; else echo "zsh not available in this container, using bash" >&2; exec bash --login; fi')
+    # "$0" receives the command string passed after this array
+    CONTAINER_EXEC_SHELL_CMD=(/bin/sh -c 'if command -v zsh >/dev/null 2>&1; then exec zsh -i -c "$0"; else exec bash --login -c "$0"; fi')
   fi
 }
 
@@ -382,11 +398,12 @@ function build_docker_command() {
   local container_state=$(get_container_state "maps-tools")
   
   DOCKER_CMD=()
+  set_container_shell_commands
   
   # Build command based on operation mode
   if [ "${RUN_AS_DAEMON}" = "true" ]; then
     if [ "$container_state" != "none" ]; then
-      docker rm -f maps-tools >/dev/null 2>&1
+      [[ "${DRY_RUN}" != true ]] && docker rm -f maps-tools >/dev/null 2>&1
     fi
     resolve_oidc_callback_ports
     DOCKER_CMD=(docker create --name maps-tools)
@@ -404,6 +421,7 @@ function build_docker_command() {
       [ -n "${AWS_PROFILE_STAGE}" ] && DOCKER_CMD+=("-e" "AWS_PROFILE=$AWS_PROFILE_STAGE")
       DOCKER_CMD+=("-e" "DEFAULT_SESSION_KUBECONFIG=$USE_SESSION_KUBECONFIG")
       DOCKER_CMD+=("-e" "MAPS_TOOLS_DAEMON_ATTACH=true")
+      DOCKER_CMD+=("-e" "MAPS_TOOLS_SHELL=$CONTAINER_SHELL")
       [ -n "${MAPS_TOOLS_BROWSER_TOKEN}" ] && DOCKER_CMD+=("-e" "MAPS_TOOLS_BROWSER_PORT=${BROWSER_LISTENER_PORT}" "-e" "MAPS_TOOLS_BROWSER_TOKEN=${MAPS_TOOLS_BROWSER_TOKEN}")
       container_start_path="$PWD"
       if echo "$container_start_path" | grep -q "$HOME"; then
@@ -413,15 +431,16 @@ function build_docker_command() {
       fi
       DOCKER_CMD+=("-e" "START_PATH=$container_start_path")
       DOCKER_CMD+=("${EXTRA_DOCKER_ARGS[@]}")
-      DOCKER_CMD+=(maps-tools /usr/bin/bash --login)
+      DOCKER_CMD+=(maps-tools "${CONTAINER_INTERACTIVE_SHELL_CMD[@]}")
     elif [ "$container_state" = "stopped" ]; then
-      docker start maps-tools
+      [[ "${DRY_RUN}" != true ]] && docker start maps-tools
       DOCKER_CMD=(docker exec -ti)
       # Only pass AWS_PROFILE if explicitly set — otherwise let bash_profile_aws
       # in the container restore the last used profile from awsctx.profile.current.
       [ -n "${AWS_PROFILE_STAGE}" ] && DOCKER_CMD+=("-e" "AWS_PROFILE=$AWS_PROFILE_STAGE")
       DOCKER_CMD+=("-e" "DEFAULT_SESSION_KUBECONFIG=$USE_SESSION_KUBECONFIG")
       DOCKER_CMD+=("-e" "MAPS_TOOLS_DAEMON_ATTACH=true")
+      DOCKER_CMD+=("-e" "MAPS_TOOLS_SHELL=$CONTAINER_SHELL")
       [ -n "${MAPS_TOOLS_BROWSER_TOKEN}" ] && DOCKER_CMD+=("-e" "MAPS_TOOLS_BROWSER_PORT=${BROWSER_LISTENER_PORT}" "-e" "MAPS_TOOLS_BROWSER_TOKEN=${MAPS_TOOLS_BROWSER_TOKEN}")
       container_start_path="$PWD"
       if echo "$container_start_path" | grep -q "$HOME"; then
@@ -444,7 +463,7 @@ function build_docker_command() {
     fi
     
     if [ "$container_state" = "stopped" ]; then
-      docker start maps-tools
+      [[ "${DRY_RUN}" != true ]] && docker start maps-tools
     fi
     
     DOCKER_CMD=(docker exec -t)
@@ -452,6 +471,7 @@ function build_docker_command() {
     # in the container restore the last used profile from awsctx.profile.current.
     [ -n "${AWS_PROFILE_STAGE}" ] && DOCKER_CMD+=("-e" "AWS_PROFILE=$AWS_PROFILE_STAGE")
     DOCKER_CMD+=("-e" "DEFAULT_SESSION_KUBECONFIG=$USE_SESSION_KUBECONFIG")
+    DOCKER_CMD+=("-e" "MAPS_TOOLS_SHELL=$CONTAINER_SHELL")
     [ -n "${MAPS_TOOLS_BROWSER_TOKEN}" ] && DOCKER_CMD+=("-e" "MAPS_TOOLS_BROWSER_PORT=${BROWSER_LISTENER_PORT}" "-e" "MAPS_TOOLS_BROWSER_TOKEN=${MAPS_TOOLS_BROWSER_TOKEN}")
     container_start_path="$PWD"
     if echo "$container_start_path" | grep -q "$HOME"; then
@@ -461,7 +481,7 @@ function build_docker_command() {
     fi
     DOCKER_CMD+=("-e" "START_PATH=$container_start_path")
     DOCKER_CMD+=("${EXTRA_DOCKER_ARGS[@]}")
-    DOCKER_CMD+=(maps-tools /usr/bin/bash --login -c "$command_to_exec")
+    DOCKER_CMD+=(maps-tools "${CONTAINER_EXEC_SHELL_CMD[@]}" "$command_to_exec")
     echo "DEBUG: Executing: ${DOCKER_CMD[*]}" >&2
     
   else
@@ -489,6 +509,16 @@ function validate_mutually_exclusive_options() {
   fi
 }
 
+function validate_container_shell() {
+  case "${CONTAINER_SHELL}" in
+    zsh|bash) ;;
+    *)
+      echo "❌ Unsupported shell '${CONTAINER_SHELL}' (MAPS_TOOLS_SHELL). Use zsh or bash."
+      exit 1
+      ;;
+  esac
+}
+
 function validate_oidc_callback_options() {
   if [[ "${OIDC_CALLBACK_PORT_OVERRIDE_SET}" == true ]] && \
      { [[ "${ATTACH_TO_DAEMON}" == true ]] || [[ "${EXEC_IN_DAEMON}" == true ]]; }; then
@@ -501,7 +531,8 @@ function validate_oidc_callback_options() {
 function run_container() {
   validate_mutually_exclusive_options
   validate_oidc_callback_options
-  ensure_browser_listener
+  validate_container_shell
+  [[ "${DRY_RUN}" != true ]] && ensure_browser_listener
   
   # Determine image tag based on RELEASE_CHANNEL
   local image_tag="${RELEASE_CHANNEL#-}"  # Remove leading dash from RELEASE_CHANNEL
@@ -530,7 +561,12 @@ function run_container() {
     done
   fi
   
-  build_docker_command "$selected_image" "$@"
+  build_docker_command "$selected_image" "$@" || exit 1
+  if [[ "${DRY_RUN}" == true ]]; then
+    printf '%q ' "${DOCKER_CMD[@]}"
+    echo
+    return 0
+  fi
   "${DOCKER_CMD[@]}"
 }
 
@@ -735,6 +771,17 @@ for arg in "$@"; do
     --dev)
       DEV_MODE=true
       ;;
+    --bash)
+      CONTAINER_SHELL=bash
+      ;;
+    --dry-run)
+      DRY_RUN=true
+      ;;
+    -x)
+      echo "❌ Option -x (Kubernetes dashboard / Octant) has been removed."
+      echo "   Use k9s inside the container instead."
+      exit 1
+      ;;
     *)
       ARGS+=("$arg")
       ;;
@@ -746,7 +793,7 @@ set -- "${ARGS[@]}"
 [[ "$1" == "--version" ]] && echo "maps-tools version: $(grep -m 1 "#version:" "$0" | awk '{print $2}')" && exit 0
 
 # Parse command line options
-while getopts "b:o:O:he:ivdaucsxE" arg; do
+while getopts "b:o:O:he:ivdaucsE" arg; do
   case "${arg}" in
     b) echo "🛠️  TODO: Build args not yet implemented" ;;
     e) AWS_PROFILE_STAGE="${OPTARG}" ;;
@@ -762,12 +809,16 @@ while getopts "b:o:O:he:ivdaucsxE" arg; do
       RELEASE_CHANNEL="${OPTARG:+-${OPTARG}}"
       PERFORM_UPDATE=true
       ;;
-    o) EXTRA_DOCKER_ARGS+=("$OPTARG") ;;
+    o)
+      # Split on whitespace so -o "-e FOO=bar" becomes two docker arguments
+      # (passed as one, docker would create the variable " FOO").
+      read -r -a _extra_args <<< "$OPTARG"
+      EXTRA_DOCKER_ARGS+=("${_extra_args[@]}")
+      ;;
     O)
       OIDC_CALLBACK_PORT_CANDIDATES="${OPTARG}"
       OIDC_CALLBACK_PORT_OVERRIDE_SET=true
       ;;
-    x) ENABLE_K8S_DASHBOARD=true ;;
     h|?|*) print_usage ;;
   esac
 done
@@ -854,7 +905,7 @@ if [[ "$DOCKER_IS_RUNNING" == true ]]; then
   
   # Quick version check on normal runs (not for attach/daemon operations)
   if [[ "${ATTACH_TO_DAEMON}" != true && "${RUN_AS_DAEMON}" != true && "${EXEC_IN_DAEMON}" != true ]]; then
-    check_version_quick
+    [[ "${DRY_RUN}" != true ]] && check_version_quick
   fi
   
   run_container "$@"
